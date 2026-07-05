@@ -72,6 +72,40 @@ For local development:
 python3 -m ansibleRunner --project-root /path/to/project --list-defaults
 ```
 
+## Standalone Project Shim
+
+For quick testing inside an Ansible project, copy or symlink the standalone
+shim:
+
+```shell
+cp examples/ansibleRunnerShim.py /path/to/ansible/project/runAnsible.py
+chmod +x /path/to/ansible/project/runAnsible.py
+```
+
+Or link it back to this checkout:
+
+```shell
+ln -s /path/to/ansibleRunner/examples/ansibleRunnerShim.py \
+  /path/to/ansible/project/runAnsible.py
+```
+
+Run it from the Ansible project root:
+
+```shell
+cd /path/to/ansible/project
+./runAnsible.py --list-defaults
+```
+
+The shim treats the current working directory as the project root, bootstraps
+`ansibleRunner` into `.venv`, installs from this repository's test wheel, then
+runs:
+
+```shell
+.venv/bin/python -m ansibleRunner --project-root "$PWD" ...
+```
+
+Build the wheel with `./scripts/build.py` before testing the shim.
+
 ## Build Check
 
 Build a local wheel distribution:
