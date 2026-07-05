@@ -9,6 +9,12 @@
 # OUTPUT VARIABLES:
 #   - dist/*.whl: Installable Python wheel distribution.
 #
+# EXIT CODES:
+#   - 0: Wheel build completed successfully.
+#   - 1: Project validation or wheel discovery failed.
+#   - 130: Build was interrupted by Ctrl-C.
+#   - pip/build return code: Dependency installation or wheel build failed.
+#
 # WORKFLOW:
 #   1. Validate that the script is running from an ansibleRunner source tree.
 #   2. Configure full-detail logging.
@@ -587,6 +593,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
+        dest="outDir",
         default="dist",
         help="Directory where the wheel will be written. Defaults to dist.",
     )
@@ -597,11 +604,13 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--venv-dir",
+        dest="venvDir",
         default=".venv",
         help="Virtual environment directory used for build bootstrapping.",
     )
     parser.add_argument(
         "--log-file",
+        dest="logFile",
         default=None,
         help="Full-detail build log file. Defaults to logs/build-<dts>.log.",
     )
@@ -613,6 +622,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--no-spinner",
+        dest="noSpinner",
         action="store_true",
         help="Disable animated step spinner.",
     )
@@ -816,7 +826,7 @@ def ensureBuildPython(context: BuildContext, args: argparse.Namespace) -> str:
         context.ui.substep("Selected Python already has build requirements.")
         return args.python
 
-    venvDir = (context.projectRoot / args.venv_dir).resolve()
+    venvDir = (context.projectRoot / args.venvDir).resolve()
     createVenv(venvDir, context)
     venvPython = getVenvPython(venvDir)
     context.ui.substep(f"Checking virtual environment Python: {venvPython}")
@@ -983,12 +993,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parseArgs(argv)
     projectRoot = Path(__file__).resolve().parent.parent
-    outDir = (projectRoot / args.out_dir).resolve()
+    outDir = (projectRoot / args.outDir).resolve()
 
-    logFile, logger = configureLogging(projectRoot, args.log_file)
+    logFile, logger = configureLogging(projectRoot, args.logFile)
     ui = BuildUi(
         logFile=logFile,
-        spinner=not args.no_spinner,
+        spinner=not args.noSpinner,
         verbose=args.verbose,
     )
     context = BuildContext(

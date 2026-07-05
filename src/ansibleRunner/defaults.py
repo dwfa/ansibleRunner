@@ -1,3 +1,19 @@
+##############################################################################
+# Default runtime paths for project-local logs and state.
+#
+# USAGE:
+#   RuntimeDefaults.forProject(projectRoot)
+#
+# OUTPUT VARIABLES:
+#   - RuntimeDefaults: Resolved project, log, and state paths.
+#
+# Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
+# Licensed under Apache License 2.0. See LICENSE.md for details.
+#
+# Version: 1.0
+# Date: July 05, 2026
+##############################################################################
+
 """Default runtime paths for logs and state."""
 
 from __future__ import annotations
@@ -8,16 +24,32 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class RuntimeDefaults:
-    project_root: Path
-    log_dir: Path
-    state_dir: Path
+    """Resolved project-local runtime paths.
+
+    Args:
+        projectRoot: Resolved project root.
+        logDir: Default directory for runtime logs.
+        stateDir: Default directory for state files.
+    """
+
+    projectRoot: Path
+    logDir: Path
+    stateDir: Path
 
     @classmethod
-    def for_project(cls, project_root: Path) -> "RuntimeDefaults":
-        root = project_root.expanduser().resolve()
-        return cls(
-            project_root=root,
-            log_dir=root / ".ansibleRunner" / "logs",
-            state_dir=root / ".ansibleRunner" / "state",
-        )
+    def forProject(cls, projectRoot: Path) -> "RuntimeDefaults":
+        """Resolve runtime defaults for a project root.
 
+        Args:
+            projectRoot: Project root to resolve.
+
+        Returns:
+            Runtime defaults rooted under the given project.
+        """
+
+        root = projectRoot.expanduser().resolve()
+        return cls(
+            projectRoot=root,
+            logDir=root / ".ansibleRunner" / "logs",
+            stateDir=root / ".ansibleRunner" / "state",
+        )

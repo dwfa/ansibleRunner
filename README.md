@@ -1,3 +1,17 @@
+<!--
+##############################################################################
+# ansibleRunner
+#
+# Package overview, installation notes, CLI usage, and wheel build workflow.
+#
+# Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
+# Licensed under Apache License 2.0. See LICENSE.md for details.
+#
+# Version: 1.0
+# Date: July 05, 2026
+##############################################################################
+-->
+
 # ansibleRunner
 
 `ansibleRunner` is a standalone Python package for reusable TUI and Ansible
@@ -18,11 +32,11 @@ project of that name.
 ```python
 from ansibleRunner import main
 
-raise SystemExit(main(project_root, argv))
+raise SystemExit(main(projectRoot, argv))
 ```
 
 The future `rpiMgmt` wrapper should only discover its project root and pass
-`project_root` plus `argv` into this package.
+`projectRoot` plus `argv` into this package.
 
 ## Installation
 

@@ -43,5 +43,7 @@ Issues = "https://github.com/dwfa/ansibleRunner/issues"
 where = ["src"]
 
 [tool.pytest.ini_options]
+python_files = ["test*.py"]
+python_functions = ["test*"]
 pythonpath = ["src"]
 testpaths = ["tests"]
