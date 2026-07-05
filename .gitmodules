@@ -1,0 +1,3 @@
+[submodule "docs/seSpecs"]
+	path = docs/seSpecs
+	url = https://github.com/dwfa/seSpecs.git

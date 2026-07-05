@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ansibleRunner"
+version = "0.1.0"
+description = "Reusable TUI and Ansible runner logic for project-local management tools."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "ansibleRunner contributors" }
+]
+license = "Apache-2.0"
+license-files = ["LICENSE.md"]
+keywords = ["ansible", "tui", "runner", "automation"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Systems Administration",
+]
+
+[project.scripts]
+ansibleRunner = "ansibleRunner.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://github.com/dwfa/ansibleRunner"
+Repository = "https://github.com/dwfa/ansibleRunner.git"
+Issues = "https://github.com/dwfa/ansibleRunner/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/*
+!dist/.gitkeep
+logs/
+*.egg-info/
+.venv/
+venv/
+.ansibleRunner/
+*.log
