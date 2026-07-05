@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 ##############################################################################
-# Build the ansibleRunner wheel distribution.
+# Test and build the ansibleRunner wheel distribution.
 #
 # USAGE:
 #   ./scripts/build.py
@@ -10,21 +10,24 @@
 #   - dist/*.whl: Installable Python wheel distribution.
 #
 # EXIT CODES:
-#   - 0: Wheel build completed successfully.
+#   - 0: Tests and wheel build completed successfully.
 #   - 1: Project validation or wheel discovery failed.
 #   - 130: Build was interrupted by Ctrl-C.
-#   - pip/build return code: Dependency installation or wheel build failed.
+#   - pip/pytest/build return code: Dependency installation, tests, or wheel
+#     build failed.
 #
 # WORKFLOW:
 #   1. Validate that the script is running from an ansibleRunner source tree.
 #   2. Configure full-detail logging.
-#   3. Bootstrap the Python build module into a project virtual environment.
-#   4. Build a wheel into the dist directory.
-#   5. Prune old build logs.
-#   6. Report the generated wheel path.
+#   3. Bootstrap test and build tooling into a project virtual environment.
+#   4. Run the pytest test suite.
+#   5. Build a wheel into the dist directory.
+#   6. Prune old build logs.
+#   7. Report the generated wheel path.
 #
 # NOTES:
-#   - The build dependency is installed automatically into .venv when missing.
+#   - Test and build dependencies are installed automatically into .venv when
+#     missing.
 #   - Full command output is written to logs/build-<dts>.log by default.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
@@ -55,8 +58,9 @@ from pathlib import Path
 
 
 PROJECT_NAME = "ansibleRunner"
-BUILD_REQUIREMENTS = [
+TOOL_REQUIREMENTS = [
     "build>=1.2",
+    "pytest>=8",
     "setuptools>=77",
     "wheel",
 ]
@@ -66,6 +70,11 @@ MAUVE_COLOUR = "\033[38;5;213m"
 RESET_COLOUR = "\033[0m"
 SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
 ANSI_PATTERN = re.compile(r"\033\[[0-9;]*m")
+PYTEST_SUMMARY_PATTERN = re.compile(
+    r"=+\s*(?P<summary>\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed)"
+    r"(?:,\s*\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed))*"
+    r"\s+in\s+[\d.]+s)\s*=+",
+)
 HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
 
@@ -381,7 +390,7 @@ class BuildUi:
         top = self._colour("╭" + ("─" * (width - 2)) + "╮")
         bottom = self._colour("╰" + ("─" * (width - 2)) + "╯")
         wheelLabel = self._green(wheelName) if wheelName else "TBD"
-        title = f"🚀 {PROJECT_NAME} Wheel Build ({wheelLabel})"
+        title = f"🚀 {PROJECT_NAME} Test + Wheel Build ({wheelLabel})"
         logText = f"Log: {self.logFile}"
         logLines = textwrap.wrap(logText, width=innerWidth) or [logText]
 
@@ -542,6 +551,23 @@ class BuildUi:
             if self.activeStep is not None:
                 self.activeStepSubstepCount += 1
 
+    def summarySubstep(self, detail: str) -> None:
+        """Print an important substep in verbose or captured output.
+
+        Args:
+            detail: Substep detail.
+        """
+
+        if self.verbose:
+            self.substep(detail)
+            return
+        if sys.stdout.isatty():
+            return
+
+        substepLine = f"{self._leftPadding(self._panelWidth())}      ╰─ {detail}"
+        print(self._subtleWhite(substepLine), flush=True)
+        self.bodyLineCount += 1
+
     def success(self, message: str) -> None:
         """Print a success message.
 
@@ -589,7 +615,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     """
 
     parser = argparse.ArgumentParser(
-        description="Build the ansibleRunner wheel distribution.",
+        description="Test and build the ansibleRunner wheel distribution.",
     )
     parser.add_argument(
         "--out-dir",
@@ -712,8 +738,8 @@ def startStep(context: BuildContext, title: str) -> None:
     context.ui.step(title)
 
 
-def hasBuildRequirements(pythonBin: str, logger: logging.Logger) -> bool:
-    """Check whether a Python executable has required build packages.
+def hasToolRequirements(pythonBin: str, logger: logging.Logger) -> bool:
+    """Check whether a Python executable has required tool packages.
 
     Args:
         pythonBin: Python executable to inspect.
@@ -737,7 +763,7 @@ def hasBuildRequirements(pythonBin: str, logger: logging.Logger) -> bool:
             "    except Exception:\n"
             "        return False\n"
             "exit(0 if ok('build', 1, 2) and ok('setuptools', 77, 0) "
-            "and ok('wheel') else 1)\n"
+        "and ok('pytest', 8, 0) and ok('wheel') else 1)\n"
         ),
     ]
     result = runCommand(
@@ -781,8 +807,8 @@ def getVenvPython(venvDir: Path) -> Path:
     return venvDir / "bin" / "python"
 
 
-def installBuildRequirements(pythonBin: Path, context: BuildContext) -> None:
-    """Install build requirements into the selected Python environment.
+def installToolRequirements(pythonBin: Path, context: BuildContext) -> None:
+    """Install test and build requirements into the selected Python environment.
 
     Args:
         pythonBin: Python executable that receives build dependencies.
@@ -797,9 +823,9 @@ def installBuildRequirements(pythonBin: Path, context: BuildContext) -> None:
         "-m",
         "pip",
         "install",
-        *BUILD_REQUIREMENTS,
+        *TOOL_REQUIREMENTS,
     ]
-    context.ui.substep(f"Installing build requirements: {', '.join(BUILD_REQUIREMENTS)}")
+    context.ui.substep(f"Installing tool requirements: {', '.join(TOOL_REQUIREMENTS)}")
     result = runCommand(command, context.logger)
 
     if result.returncode != 0:
@@ -821,9 +847,9 @@ def ensureBuildPython(context: BuildContext, args: argparse.Namespace) -> str:
     context.logger.debug("<ensureBuildPython> entry: python=[%s]", args.python)
     startStep(context, "🧰 Prepare build environment")
     context.ui.substep(f"Checking Python: {args.python}")
-    if hasBuildRequirements(args.python, context.logger):
+    if hasToolRequirements(args.python, context.logger):
         context.logger.debug("<ensureBuildPython> exit: usingPython=[%s]", args.python)
-        context.ui.substep("Selected Python already has build requirements.")
+        context.ui.substep("Selected Python already has test/build requirements.")
         return args.python
 
     venvDir = (context.projectRoot / args.venvDir).resolve()
@@ -831,8 +857,8 @@ def ensureBuildPython(context: BuildContext, args: argparse.Namespace) -> str:
     venvPython = getVenvPython(venvDir)
     context.ui.substep(f"Checking virtual environment Python: {venvPython}")
 
-    if not hasBuildRequirements(str(venvPython), context.logger):
-        installBuildRequirements(venvPython, context)
+    if not hasToolRequirements(str(venvPython), context.logger):
+        installToolRequirements(venvPython, context)
 
     context.logger.debug(
         "<ensureBuildPython> exit: bootstrappedPython=[%s]",
@@ -981,6 +1007,56 @@ def buildWheel(context: BuildContext, pythonBin: str) -> Path:
     raise SystemExit(f"Build finished, but no wheel was found in {context.outDir}.")
 
 
+def runTests(context: BuildContext, pythonBin: str) -> None:
+    """Run the pytest test suite as a build macro step.
+
+    Args:
+        context: Build runtime context.
+        pythonBin: Python executable with pytest available.
+
+    Raises:
+        SystemExit: When pytest fails.
+    """
+
+    context.logger.debug("<runTests> entry: python=[%s]", pythonBin)
+    startStep(context, "🧪 Run tests")
+    context.ui.substep(f"Test Python: {pythonBin}")
+    context.ui.substep("Running pytest.")
+
+    command = [
+        pythonBin,
+        "-m",
+        "pytest",
+    ]
+    result = runCommand(command, context.logger, cwd=context.projectRoot)
+
+    if result.returncode != 0:
+        context.ui.failure("Tests failed. See log for more details.")
+        raise SystemExit(result.returncode)
+
+    summary = summarizePytestOutput(result.stdout)
+    if summary:
+        context.ui.activeStep = f"🧪 Run tests ({summary})"
+        context.ui.summarySubstep(f"Tests passed: {summary}")
+    context.logger.debug("<runTests> exit: returnCode=[%s]", result.returncode)
+
+
+def summarizePytestOutput(output: str) -> str:
+    """Extract pytest's final test-count summary.
+
+    Args:
+        output: Captured pytest stdout.
+
+    Returns:
+        Summary text such as ``23 passed in 0.29s`` when available.
+    """
+
+    matches = list(PYTEST_SUMMARY_PATTERN.finditer(output))
+    if not matches:
+        return ""
+    return matches[-1].group("summary")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the wheel build helper.
 
@@ -1016,6 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         requireProjectRoot(context)
         buildPython = ensureBuildPython(context, args)
+        runTests(context, buildPython)
         wheelPath = buildWheel(context, buildPython)
         pruneBuildLogs(context)
 

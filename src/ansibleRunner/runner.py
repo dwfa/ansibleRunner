@@ -18,12 +18,62 @@
 
 from __future__ import annotations
 
+import argparse
+import os
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
+from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.progress import RunProgress
+
+
+@dataclass(frozen=True)
+class Pause:
+    """Pause marker for chained playbook execution.
+
+    Args:
+        message: Message shown before waiting for user input.
+    """
+
+    message: str
+
+
+@dataclass(frozen=True)
+class PlaybookRun:
+    """Playbook path and default target node for a chain entry.
+
+    Args:
+        playbook: Project-relative or absolute playbook path.
+        defaultNode: Default Ansible node/group for the playbook.
+    """
+
+    playbook: str | Path
+    defaultNode: str
+
+
+@dataclass(frozen=True)
+class RunnerOptions:
+    """Parsed wrapper-style options for Ansible execution.
+
+    Args:
+        debugFlag: Whether to pass ``debugFlag=1`` to Ansible.
+        extraArgs: Extra arguments passed through to ``ansible-playbook``.
+        node: Optional node override applied to every playbook entry.
+        outputLevel: Progress detail level reserved for TUI progress mode.
+        syntaxCheck: Whether ``--syntax-check`` was requested.
+        testOnly: Test/list flags passed through to ``ansible-playbook``.
+    """
+
+    debugFlag: bool = False
+    extraArgs: tuple[str, ...] = ()
+    node: str | None = None
+    outputLevel: str = "role"
+    syntaxCheck: bool = False
+    testOnly: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -35,12 +85,14 @@ class RunnerResult:
         returnCode: Process return code.
         stdout: Captured standard output.
         stderr: Captured standard error.
+        logPath: Optional log path used for streamed playbook output.
     """
 
     command: tuple[str, ...]
     returnCode: int
     stdout: str
     stderr: str
+    logPath: Path | None = None
 
     @property
     def progress(self) -> RunProgress:
@@ -56,14 +108,115 @@ class RunnerResult:
 class AnsibleCommandRunner:
     """Runs Ansible commands from a project root."""
 
-    def __init__(self, projectRoot: Path) -> None:
+    def __init__(self, projectRoot: Path, logDir: Path | None = None) -> None:
         """Initialize a subprocess runner for a project root.
 
         Args:
             projectRoot: Directory where commands should be executed.
+            logDir: Optional directory for per-playbook run logs.
         """
 
         self.projectRoot = projectRoot.expanduser().resolve()
+        self.logDir = self._resolveLogDir(logDir)
+
+    @staticmethod
+    def parseOptions(argv: Sequence[str] | None = None) -> RunnerOptions:
+        """Parse wrapper-style arguments into runner options.
+
+        Args:
+            argv: Optional command-line arguments excluding the executable name.
+
+        Returns:
+            Parsed runner options.
+        """
+
+        parser = argparse.ArgumentParser(add_help=True, allow_abbrev=False)
+        parser.add_argument(
+            "-c",
+            action="store_true",
+            dest="check",
+            help="Pass --check to ansible-playbook.",
+        )
+        parser.add_argument(
+            "-d",
+            action="store_true",
+            dest="debug",
+            help="Pass debugFlag=1 to ansible-playbook.",
+        )
+        parser.add_argument(
+            "-n",
+            default=None,
+            dest="node",
+            help="Override the default node for all playbook entries.",
+        )
+        parser.add_argument(
+            "-s",
+            action="store_true",
+            dest="syntax",
+            help="Pass --syntax-check to ansible-playbook.",
+        )
+        parser.add_argument(
+            "-t",
+            action="store_true",
+            dest="listTasks",
+            help="Pass --list-tasks to ansible-playbook.",
+        )
+        parser.add_argument(
+            "--output-level",
+            choices=("play", "role", "task"),
+            default="role",
+            dest="outputLevel",
+            help="Progress detail level for TUI progress mode.",
+        )
+
+        namespace, extraArgs = parser.parse_known_args(argv)
+        testOnly: list[str] = []
+        if namespace.check:
+            testOnly.append("--check")
+        if namespace.syntax:
+            testOnly.append("--syntax-check")
+        if namespace.listTasks:
+            testOnly.append("--list-tasks")
+
+        return RunnerOptions(
+            debugFlag=namespace.debug,
+            extraArgs=tuple(extraArgs),
+            node=namespace.node,
+            outputLevel=namespace.outputLevel,
+            syntaxCheck=namespace.syntax,
+            testOnly=tuple(testOnly),
+        )
+
+    @staticmethod
+    def buildPlaybookCommand(
+        playbook: str | Path,
+        node: str,
+        options: RunnerOptions | None = None,
+    ) -> tuple[str, ...]:
+        """Build the ``ansible-playbook`` command for one playbook.
+
+        Args:
+            playbook: Playbook path passed to ``ansible-playbook``.
+            node: Effective node/group for the playbook run.
+            options: Parsed runner options.
+
+        Returns:
+            Command tuple suitable for subprocess execution.
+        """
+
+        runnerOptions = options or RunnerOptions()
+        extraVars: list[str] = [f"nodes={node}"]
+        if runnerOptions.debugFlag:
+            extraVars.append("debugFlag=1")
+        if runnerOptions.syntaxCheck:
+            extraVars.append("newTarget=localhost")
+
+        command: list[str] = ["ansible-playbook"]
+        command.extend(runnerOptions.testOnly)
+        command.extend(["--extra-vars", " ".join(extraVars)])
+        command.extend(runnerOptions.extraArgs)
+        command.append(str(playbook))
+        return tuple(command)
 
     def run(self, command: Sequence[str]) -> RunnerResult:
         """Run a command in the configured project root.
@@ -88,3 +241,224 @@ class AnsibleCommandRunner:
             stdout=completed.stdout,
             stderr=completed.stderr,
         )
+
+    def runChain(
+        self,
+        entries: Sequence[PlaybookRun | Pause | tuple[str | Path, str]],
+        argv: Sequence[str] | None = None,
+        progressMode: bool = False,
+    ) -> int:
+        """Run a playbook chain, stopping on the first failure.
+
+        Args:
+            entries: Playbook entries and pauses to process in order.
+            argv: Optional runner arguments excluding the executable name.
+            progressMode: Reserved for future TUI progress rendering.
+
+        Returns:
+            Zero on success, otherwise the first non-zero return code.
+        """
+
+        options = self.parseOptions(argv)
+        for entry in entries:
+            if isinstance(entry, Pause):
+                try:
+                    input(f"\n{entry.message}\nPress Enter to continue...")
+                except KeyboardInterrupt:
+                    return 130
+                continue
+
+            playbookRun = self._coercePlaybookRun(entry)
+            result = self.runPlaybook(
+                playbookRun.playbook,
+                playbookRun.defaultNode,
+                options,
+                progressMode,
+            )
+            if result.returnCode != 0:
+                return result.returnCode
+        return 0
+
+    def runPlaybook(
+        self,
+        playbook: str | Path,
+        defaultNode: str,
+        options: RunnerOptions | None = None,
+        progressMode: bool = False,
+    ) -> RunnerResult:
+        """Run one project playbook with wrapper-style Ansible defaults.
+
+        Args:
+            playbook: Project-relative or absolute playbook path.
+            defaultNode: Default node/group used when no override is provided.
+            options: Parsed runner options.
+            progressMode: Reserved for future TUI progress rendering.
+
+        Returns:
+            Captured playbook run result.
+        """
+
+        del progressMode
+
+        runnerOptions = options or RunnerOptions()
+        node = runnerOptions.node or defaultNode
+        if not node:
+            return RunnerResult(
+                command=(),
+                returnCode=1,
+                stderr=(
+                    f"ERROR: no node for [{playbook}] -- entry has no default "
+                    "and -n <node> was not given"
+                ),
+                stdout="",
+            )
+
+        playbookPath = self._resolvePlaybookPath(playbook)
+        if not playbookPath.is_file():
+            return RunnerResult(
+                command=(),
+                returnCode=1,
+                stderr=f"ERROR: file not found [{playbook}]!",
+                stdout="",
+            )
+
+        logPath = self._buildLogPath(playbookPath)
+        command = self.buildPlaybookCommand(playbook, node, runnerOptions)
+        env = self._buildEnv(runnerOptions)
+
+        print(f"Running {Path(playbook).stem} playbook ...")
+        print(f"Logging to {logPath}")
+
+        returnCode = self._execAndTee(command, env, logPath)
+        return RunnerResult(
+            command=command,
+            returnCode=returnCode,
+            stderr="",
+            stdout="",
+            logPath=logPath,
+        )
+
+    def _buildEnv(self, options: RunnerOptions) -> dict[str, str]:
+        """Build the environment for an Ansible subprocess.
+
+        Args:
+            options: Parsed runner options.
+
+        Returns:
+            Environment mapping for subprocess execution.
+        """
+
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        if not options.debugFlag:
+            env["ANSIBLE_DISPLAY_SKIPPED_HOSTS"] = "false"
+        return env
+
+    def _buildLogPath(self, playbookPath: Path) -> Path:
+        """Build a timestamped log path for a playbook.
+
+        Args:
+            playbookPath: Resolved playbook path.
+
+        Returns:
+            Log file path under the runner log directory.
+        """
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return self.logDir / f"{playbookPath.stem}-{timestamp}.log"
+
+    @staticmethod
+    def _coercePlaybookRun(
+        entry: PlaybookRun | tuple[str | Path, str],
+    ) -> PlaybookRun:
+        """Normalize a playbook chain entry.
+
+        Args:
+            entry: PlaybookRun object or compatible tuple.
+
+        Returns:
+            Normalized playbook run entry.
+        """
+
+        if isinstance(entry, PlaybookRun):
+            return entry
+        playbook, defaultNode = entry
+        return PlaybookRun(playbook=playbook, defaultNode=defaultNode)
+
+    def _execAndTee(
+        self,
+        command: Sequence[str],
+        env: dict[str, str],
+        logPath: Path,
+    ) -> int:
+        """Execute a command and tee merged output to stdout and a log.
+
+        Args:
+            command: Command and arguments to execute.
+            env: Environment for the subprocess.
+            logPath: File where merged output should be written.
+
+        Returns:
+            Subprocess return code.
+        """
+
+        logPath.parent.mkdir(parents=True, exist_ok=True)
+        with logPath.open("w", encoding="utf-8") as logFile:
+            process = subprocess.Popen(
+                list(command),
+                cwd=self.projectRoot,
+                env=env,
+                stderr=subprocess.STDOUT,
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert process.stdout is not None
+            self._teeOutput(process.stdout, logFile)
+            process.stdout.close()
+            return process.wait()
+
+    def _resolvePlaybookPath(self, playbook: str | Path) -> Path:
+        """Resolve a playbook path for filesystem validation.
+
+        Args:
+            playbook: Project-relative or absolute playbook path.
+
+        Returns:
+            Absolute playbook path.
+        """
+
+        playbookPath = Path(playbook)
+        if playbookPath.is_absolute():
+            return playbookPath
+        return self.projectRoot / playbookPath
+
+    def _resolveLogDir(self, logDir: Path | None) -> Path:
+        """Resolve the log directory for playbook execution.
+
+        Args:
+            logDir: Optional caller-supplied log directory.
+
+        Returns:
+            Resolved log directory path.
+        """
+
+        if logDir is not None:
+            return logDir.expanduser()
+        envLogDir = os.environ.get("LOG_DIR")
+        if envLogDir:
+            return Path(envLogDir).expanduser()
+        return RuntimeDefaults.forProject(self.projectRoot).logDir
+
+    @staticmethod
+    def _teeOutput(source: TextIO, logFile: TextIO) -> None:
+        """Write subprocess output to stdout and a log file.
+
+        Args:
+            source: Text stream from the subprocess.
+            logFile: Writable log file stream.
+        """
+
+        for line in source:
+            print(line, end="")
+            logFile.write(line)
+            logFile.flush()

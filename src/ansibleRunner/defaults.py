@@ -37,7 +37,7 @@ class RuntimeDefaults:
     stateDir: Path
 
     @classmethod
-    def forProject(cls, projectRoot: Path) -> "RuntimeDefaults":
+    def forProject(cls, projectRoot: str | Path) -> "RuntimeDefaults":
         """Resolve runtime defaults for a project root.
 
         Args:
@@ -47,7 +47,7 @@ class RuntimeDefaults:
             Runtime defaults rooted under the given project.
         """
 
-        root = projectRoot.expanduser().resolve()
+        root = Path(projectRoot).expanduser().resolve()
         return cls(
             projectRoot=root,
             logDir=root / ".ansibleRunner" / "logs",
