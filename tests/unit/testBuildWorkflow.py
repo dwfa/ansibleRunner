@@ -1,13 +1,12 @@
 ##############################################################################
-# Build macro tests for ansibleRunner.
+# Build workflow unit tests for ansibleRunner.
 #
 # USAGE:
-#   python3 -m pytest tests/testBuild.py
+#   python3 -m pytest tests/unit/testBuildWorkflow.py
 #
 # WORKFLOW:
-#   1. Verify build tooling self-bootstraps pytest.
-#   2. Verify the build macro runs tests before building the wheel.
-#   3. Verify failed tests prevent wheel creation.
+#   1. Verify the build macro runs tests before building the wheel.
+#   2. Verify failed tests prevent wheel creation.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
 # Licensed under Apache License 2.0. See LICENSE.md for details.
@@ -24,35 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-def testToolRequirementsIncludePytest() -> None:
-    """Verify the self-bootstrapped toolchain includes pytest."""
-
-    build = _loadBuildModule()
-
-    assert "pytest>=8" in build.TOOL_REQUIREMENTS
-
-
-def testSummarizePytestOutputFindsFinalSummary() -> None:
-    """Verify pytest output summaries can be surfaced in the build UI."""
-
-    build = _loadBuildModule()
-    output = (
-        "============================= test session starts ==============================\n"
-        "collected 23 items\n"
-        "============================== 23 passed in 0.29s ==============================\n"
-    )
-
-    assert build.summarizePytestOutput(output) == "23 passed in 0.29s"
-
-
-def testSummarizePytestOutputReturnsEmptyWhenMissing() -> None:
-    """Verify missing pytest summaries are ignored gracefully."""
-
-    build = _loadBuildModule()
-
-    assert build.summarizePytestOutput("no summary here") == ""
 
 
 def testMainRunsTestsBeforeWheelBuild(monkeypatch: Any, tmp_path: Path) -> None:
@@ -138,7 +108,7 @@ def _fakeConfigureLogging(projectRoot: Path, logFileArg: str | None) -> tuple[Pa
 def _loadBuildModule() -> Any:
     """Load scripts/build.py as an importable test module."""
 
-    buildPath = Path(__file__).resolve().parent.parent / "scripts" / "build.py"
+    buildPath = Path(__file__).resolve().parents[2] / "scripts" / "build.py"
     spec = importlib.util.spec_from_file_location("ansibleRunnerBuildScript", buildPath)
     assert spec is not None
     assert spec.loader is not None

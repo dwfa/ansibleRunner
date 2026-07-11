@@ -1,13 +1,12 @@
 ##############################################################################
-# Command-line contract tests for ansibleRunner.
+# CLI argument unit tests for ansibleRunner.
 #
 # USAGE:
-#   python3 -m pytest tests/testCli.py
+#   python3 -m pytest tests/unit/testCliArguments.py
 #
 # WORKFLOW:
-#   1. Verify CLI project-root defaults and overrides.
-#   2. Verify argparse error and help behavior.
-#   3. Verify the configured console entry point is importable.
+#   1. Verify argparse error behavior.
+#   2. Verify argparse help behavior.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
 # Licensed under Apache License 2.0. See LICENSE.md for details.
@@ -24,35 +23,6 @@ from typing import Any
 import pytest
 
 from ansibleRunner import cli
-
-
-def testCliMainUsesCwdByDefault(
-    tmp_path: Path,
-    monkeypatch: Any,
-    capsys: Any,
-) -> None:
-    """Verify the CLI uses the current working directory by default."""
-
-    monkeypatch.chdir(tmp_path)
-
-    result = cli.main(["--list-defaults"])
-
-    assert result == 0
-    output = capsys.readouterr().out
-    assert f"projectRoot={tmp_path.resolve()}" in output
-
-
-def testCliMainAcceptsExplicitProjectRoot(tmp_path: Path, capsys: Any) -> None:
-    """Verify the CLI accepts an explicit project-root override."""
-
-    projectRoot = tmp_path / "elsewhere"
-    projectRoot.mkdir()
-
-    result = cli.main(["--project-root", str(projectRoot), "--list-defaults"])
-
-    assert result == 0
-    output = capsys.readouterr().out
-    assert f"projectRoot={projectRoot.resolve()}" in output
 
 
 def testCliMainRejectsUnknownFlag(
@@ -87,12 +57,3 @@ def testCliHelpDoesNotCrash(
     output = capsys.readouterr().out
     assert "--list-defaults" in output
     assert "--project-root" in output
-
-
-def testConsoleScriptEntryPointResolves() -> None:
-    """Verify the configured console entry point imports."""
-
-    from ansibleRunner.cli import main as cliMain
-
-    assert callable(cliMain)
-

@@ -1,13 +1,12 @@
 ##############################################################################
-# Runner behavior tests for ansibleRunner.
+# Runner execution unit tests for ansibleRunner.
 #
 # USAGE:
-#   python3 -m pytest tests/testRunner.py
+#   python3 -m pytest tests/unit/testRunnerExecution.py
 #
 # WORKFLOW:
-#   1. Verify wrapper-style flags build the expected ansible-playbook command.
-#   2. Verify playbook runs tee output to a project-local log.
-#   3. Verify chains stop at the first failing playbook.
+#   1. Verify playbook runs tee output to a project-local log.
+#   2. Verify chains stop at the first failing playbook.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
 # Licensed under Apache License 2.0. See LICENSE.md for details.
@@ -16,49 +15,12 @@
 # Date: July 05, 2026
 ##############################################################################
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
 from ansibleRunner.runner import AnsibleCommandRunner, RunnerOptions
-
-
-def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
-    """Verify wrapper-style flags build the expected Ansible command."""
-
-    options = AnsibleCommandRunner.parseOptions(
-        [
-            "-d",
-            "-c",
-            "-s",
-            "-t",
-            "-n",
-            "dns",
-            "--output-level",
-            "task",
-            "-e",
-            "custom=value",
-        ]
-    )
-
-    command = AnsibleCommandRunner.buildPlaybookCommand(
-        "playbooks/site.yaml",
-        "dns",
-        options,
-    )
-
-    assert options.node == "dns"
-    assert options.outputLevel == "task"
-    assert command == (
-        "ansible-playbook",
-        "--check",
-        "--syntax-check",
-        "--list-tasks",
-        "--extra-vars",
-        "nodes=dns debugFlag=1 newTarget=localhost",
-        "-e",
-        "custom=value",
-        "playbooks/site.yaml",
-    )
 
 
 def testRunPlaybookWritesMergedOutputToLog(

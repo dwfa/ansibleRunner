@@ -40,9 +40,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -69,12 +69,7 @@ GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
 RESET_COLOUR = "\033[0m"
 SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
-ANSI_PATTERN = re.compile(r"\033\[[0-9;]*m")
-PYTEST_SUMMARY_PATTERN = re.compile(
-    r"=+\s*(?P<summary>\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed)"
-    r"(?:,\s*\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed))*"
-    r"\s+in\s+[\d.]+s)\s*=+",
-)
+ANSI_PATTERN_TEXT = "\033\\[[0-9;]*m"
 HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
 
@@ -172,7 +167,9 @@ class BuildUi:
             Plain text without ANSI colour sequences.
         """
 
-        return ANSI_PATTERN.sub("", text)
+        import re
+
+        return re.sub(ANSI_PATTERN_TEXT, "", text)
 
     def _displayWidth(self, text: str) -> int:
         """Calculate terminal display width for text.
@@ -1021,24 +1018,24 @@ def runTests(context: BuildContext, pythonBin: str) -> None:
     context.logger.debug("<runTests> entry: python=[%s]", pythonBin)
     startStep(context, "🧪 Run tests")
     context.ui.substep(f"Test Python: {pythonBin}")
-    context.ui.substep("Running pytest.")
-
-    command = [
+    context.ui.substep("Running unit tests.")
+    testScript = loadTestScript(context.projectRoot)
+    result = testScript.runTestSuite(
+        context.projectRoot,
         pythonBin,
-        "-m",
-        "pytest",
-    ]
-    result = runCommand(command, context.logger, cwd=context.projectRoot)
+        ["unit"],
+        emitOutput=False,
+        logger=context.logger,
+    )
 
-    if result.returncode != 0:
+    if result.returnCode != 0:
         context.ui.failure("Tests failed. See log for more details.")
-        raise SystemExit(result.returncode)
+        raise SystemExit(result.returnCode)
 
-    summary = summarizePytestOutput(result.stdout)
-    if summary:
-        context.ui.activeStep = f"🧪 Run tests ({summary})"
-        context.ui.summarySubstep(f"Tests passed: {summary}")
-    context.logger.debug("<runTests> exit: returnCode=[%s]", result.returncode)
+    if result.summary:
+        context.ui.activeStep = f"🧪 Run tests ({result.summary})"
+        context.ui.summarySubstep(f"Tests passed: {result.summary}")
+    context.logger.debug("<runTests> exit: returnCode=[%s]", result.returnCode)
 
 
 def summarizePytestOutput(output: str) -> str:
@@ -1051,10 +1048,29 @@ def summarizePytestOutput(output: str) -> str:
         Summary text such as ``23 passed in 0.29s`` when available.
     """
 
-    matches = list(PYTEST_SUMMARY_PATTERN.finditer(output))
-    if not matches:
-        return ""
-    return matches[-1].group("summary")
+    testScript = loadTestScript(Path(__file__).resolve().parent.parent)
+    return testScript.summarizePytestOutput(output)
+
+
+def loadTestScript(projectRoot: Path) -> object:
+    """Load scripts/test.py as an importable helper module.
+
+    Args:
+        projectRoot: Project root containing the scripts directory.
+
+    Returns:
+        Imported test helper module.
+    """
+
+    scriptPath = projectRoot / "scripts" / "test.py"
+    spec = importlib.util.spec_from_file_location("ansibleRunnerTestScript", scriptPath)
+    assert spec is not None
+    assert spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main(argv: list[str] | None = None) -> int:

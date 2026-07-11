@@ -74,18 +74,18 @@ python3 -m ansibleRunner --project-root /path/to/project --list-defaults
 
 ## Standalone Project Shim
 
-For quick testing inside an Ansible project, copy or symlink the standalone
-shim:
+For quick end-to-end testing inside an Ansible project, copy or symlink the
+standalone shim:
 
 ```shell
-cp examples/ansibleRunnerShim.py /path/to/ansible/project/runAnsible.py
+cp tests/endToEnd/ansibleRunnerShim.py /path/to/ansible/project/runAnsible.py
 chmod +x /path/to/ansible/project/runAnsible.py
 ```
 
 Or link it back to this checkout:
 
 ```shell
-ln -s /path/to/ansibleRunner/examples/ansibleRunnerShim.py \
+ln -s /path/to/ansibleRunner/tests/endToEnd/ansibleRunnerShim.py \
   /path/to/ansible/project/runAnsible.py
 ```
 

@@ -2,7 +2,7 @@
 # Runtime default unit tests for ansibleRunner.
 #
 # USAGE:
-#   python3 -m pytest tests/testDefaults.py
+#   python3 -m pytest tests/unit/testRuntimeDefaults.py
 #
 # WORKFLOW:
 #   1. Verify RuntimeDefaults resolves project roots.
