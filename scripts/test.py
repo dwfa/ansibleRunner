@@ -46,6 +46,8 @@ from pathlib import Path
 PROJECT_NAME = "ansibleRunner"
 TEST_REQUIREMENTS = [
     "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "textual>=0.89",
 ]
 PYTEST_SUMMARY_PATTERN = re.compile(
     r"=+\s*(?P<summary>\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed)"
@@ -232,7 +234,11 @@ def hasTestRequirements(pythonBin: str, logger: logging.Logger | None = None) ->
             "try:\n"
             "    parts = m.version('pytest').split('.')\n"
             "    version = (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)\n"
-            "    exit(0 if version >= (8, 0) else 1)\n"
+            "    pytest_asyncio = m.version('pytest-asyncio').split('.')\n"
+            "    pytest_asyncio_version = (int(pytest_asyncio[0]), int(pytest_asyncio[1]) if len(pytest_asyncio) > 1 else 0)\n"
+            "    textual = m.version('textual').split('.')\n"
+            "    textual_version = (int(textual[0]), int(textual[1]) if len(textual) > 1 else 0)\n"
+            "    exit(0 if version >= (8, 0) and pytest_asyncio_version >= (0, 23) and textual_version >= (0, 89) else 1)\n"
             "except Exception:\n"
             "    exit(1)\n"
         ),

@@ -9,7 +9,7 @@
 # WORKFLOW:
 #   1. Treat the current working directory as the Ansible project root.
 #   2. Create .venv under the project root when needed.
-#   3. Install ansibleRunner from the local test wheel when missing.
+#   3. Install ansibleRunner from the local test wheel.
 #   4. Run the installed ansibleRunner toolkit under the project .venv.
 #
 # OUTPUT VARIABLES:
@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 import venv
+from datetime import datetime
 from pathlib import Path
 
 
@@ -54,9 +55,10 @@ def main(argv: list[str] | None = None) -> int:
     projectRoot = Path.cwd().resolve()
     venvDir = projectRoot / ".venv"
     venvPython = getVenvPython(venvDir)
+    logPath = getLogPath(projectRoot)
 
     ensureVenv(venvDir)
-    ensurePackageInstalled(venvPython)
+    installPackage(venvPython, logPath)
 
     command = [
         str(venvPython),
@@ -69,32 +71,55 @@ def main(argv: list[str] | None = None) -> int:
     return subprocess.run(command, check=False).returncode
 
 
-def ensurePackageInstalled(pythonBin: Path) -> None:
-    """Install ansibleRunner from the test wheel when missing.
+def getLogPath(projectRoot: Path) -> Path:
+    """Return a project-local shim log path.
+
+    Args:
+        projectRoot: Ansible project root.
+
+    Returns:
+        Log path under ``.ansibleRunner/logs``.
+    """
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return projectRoot / ".ansibleRunner" / "logs" / f"shim-{timestamp}.log"
+
+
+def installPackage(pythonBin: Path, logPath: Path) -> None:
+    """Install ansibleRunner from the test wheel.
 
     Args:
         pythonBin: Project virtual environment Python executable.
+        logPath: File receiving pip install output.
     """
 
-    if isPackageInstalled(pythonBin):
-        return
     if not WHEEL_PATH.is_file():
         raise SystemExit(f"ansibleRunner wheel not found: {WHEEL_PATH}")
 
+    logPath.parent.mkdir(parents=True, exist_ok=True)
     print(f"Installing {PACKAGE_NAME} from {WHEEL_PATH}", file=sys.stderr)
-    result = subprocess.run(
-        [
-            str(pythonBin),
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            str(WHEEL_PATH),
-        ],
-        check=False,
-        text=True,
-    )
+    print(f"Install log: {logPath}", file=sys.stderr)
+    command = [
+        str(pythonBin),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        str(WHEEL_PATH),
+    ]
+    with logPath.open("w", encoding="utf-8") as logFile:
+        logFile.write(f"command={' '.join(command)}\n\n")
+        logFile.flush()
+        result = subprocess.run(
+            command,
+            check=False,
+            stderr=subprocess.STDOUT,
+            stdout=logFile,
+            text=True,
+        )
     if result.returncode != 0:
+        print(f"Install failed. See log: {logPath}", file=sys.stderr)
         raise SystemExit(result.returncode)
 
 
@@ -124,30 +149,6 @@ def getVenvPython(venvDir: Path) -> Path:
     if os.name == "nt":
         return venvDir / "Scripts" / "python.exe"
     return venvDir / "bin" / "python"
-
-
-def isPackageInstalled(pythonBin: Path) -> bool:
-    """Check whether ansibleRunner is importable in the venv.
-
-    Args:
-        pythonBin: Python executable to inspect.
-
-    Returns:
-        True when ansibleRunner is importable, otherwise False.
-    """
-
-    result = subprocess.run(
-        [
-            str(pythonBin),
-            "-c",
-            (
-                "import importlib.util, sys; "
-                f"sys.exit(0 if importlib.util.find_spec({PACKAGE_NAME!r}) else 1)"
-            ),
-        ],
-        check=False,
-    )
-    return result.returncode == 0
 
 
 if __name__ == "__main__":

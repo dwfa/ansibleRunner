@@ -63,6 +63,15 @@ python3 -m pip install -e ".[dev]"
 After installation:
 
 ```shell
+ansibleRunner --project-root /path/to/project
+```
+
+With no diagnostic flag, `ansibleRunner` opens the Textual playbook menu for
+the selected project root.
+
+To print resolved project defaults without opening the TUI:
+
+```shell
 ansibleRunner --project-root /path/to/project --list-defaults
 ```
 

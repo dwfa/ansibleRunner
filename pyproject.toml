@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Reusable TUI and Ansible runner logic for project-local management tools."
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "textual>=0.89",
+]
 authors = [
   { name = "ansibleRunner contributors" }
 ]
@@ -32,6 +35,7 @@ ansibleRunner = "ansibleRunner.cli:main"
 dev = [
   "build>=1.2",
   "pytest>=8",
+  "pytest-asyncio>=0.23",
 ]
 
 [project.urls]

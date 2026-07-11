@@ -61,7 +61,9 @@ PROJECT_NAME = "ansibleRunner"
 TOOL_REQUIREMENTS = [
     "build>=1.2",
     "pytest>=8",
+    "pytest-asyncio>=0.23",
     "setuptools>=77",
+    "textual>=0.89",
     "wheel",
 ]
 LOG_FILE_ENV_VAR = "ANSIBLE_RUNNER_BUILD_LOG"
@@ -760,7 +762,8 @@ def hasToolRequirements(pythonBin: str, logger: logging.Logger) -> bool:
             "    except Exception:\n"
             "        return False\n"
             "exit(0 if ok('build', 1, 2) and ok('setuptools', 77, 0) "
-        "and ok('pytest', 8, 0) and ok('wheel') else 1)\n"
+        "and ok('pytest', 8, 0) and ok('pytest-asyncio', 0, 23) "
+        "and ok('textual', 0, 89) and ok('wheel') else 1)\n"
         ),
     ]
     result = runCommand(

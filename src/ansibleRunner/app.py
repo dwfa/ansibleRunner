@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ansibleRunner.defaults import RuntimeDefaults
+from ansibleRunner.tui import runTui
 
 
 def buildParser() -> argparse.ArgumentParser:
@@ -87,8 +88,7 @@ class AnsibleRunnerApp:
             self._printDefaults()
             return 0
 
-        self._printDefaults()
-        return 0
+        return runTui(self.defaults)
 
     def _printDefaults(self) -> None:
         """Print the resolved project-local runtime defaults."""

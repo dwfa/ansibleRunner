@@ -33,7 +33,7 @@ def testMainRunsInstalledToolkitFromCurrentDirectory(
     calls: list[list[str]] = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(shim, "ensureVenv", lambda venvDir: None)
-    monkeypatch.setattr(shim, "ensurePackageInstalled", lambda pythonBin: None)
+    monkeypatch.setattr(shim, "installPackage", lambda pythonBin, logPath: None)
     monkeypatch.setattr(
         shim.subprocess,
         "run",
