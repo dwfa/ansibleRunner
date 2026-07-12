@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Footer, Header
@@ -22,7 +24,11 @@ from textual.widgets import Footer, Header
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookEntry
 from ansibleRunner.tui.configure.screen import ConfigureScreen
+from ansibleRunner.tui.launch.screen import LaunchScreen
 from ansibleRunner.tui.playbooks.screen import PlaybookMenuScreen
+
+
+DoneHandler = Callable[[], Awaitable[None]]
 
 
 class AnsibleRunnerTui(App[int]):
@@ -55,8 +61,15 @@ class AnsibleRunnerTui(App[int]):
         width: 100%;
     }
 
+    #launch-menu {
+        align: center top;
+        height: 1fr;
+        width: 100%;
+    }
+
     #playbook-panel,
-    #configure-panel {
+    #configure-panel,
+    #launch-panel {
         border: round cyan;
         height: auto;
         max-height: 90%;
@@ -66,7 +79,9 @@ class AnsibleRunnerTui(App[int]):
 
     #playbook-title,
     #configure-prefix,
-    #configure-title {
+    #configure-title,
+    #launch-prefix,
+    #launch-title {
         color: cyan;
         margin-bottom: 1;
         text-style: bold;
@@ -78,15 +93,25 @@ class AnsibleRunnerTui(App[int]):
         margin-left: 2;
     }
 
-    #configure-heading {
+    #launch-description {
+        color: $text-muted;
+        margin-bottom: 1;
+        margin-left: 2;
+        width: 1fr;
+    }
+
+    #configure-heading,
+    #launch-heading {
         height: auto;
     }
 
-    #configure-prefix {
+    #configure-prefix,
+    #launch-prefix {
         width: 12;
     }
 
-    #configure-title {
+    #configure-title,
+    #launch-title {
         width: auto;
         max-width: 28;
     }
@@ -96,13 +121,15 @@ class AnsibleRunnerTui(App[int]):
     }
 
     #playbook-table,
-    #configure-table {
+    #configure-table,
+    #launch-table {
         height: auto;
         max-height: 24;
     }
 
     #playbook-help,
-    #configure-help {
+    #configure-help,
+    #launch-help {
         color: $text-muted;
         margin-top: 1;
     }
@@ -146,18 +173,62 @@ class AnsibleRunnerTui(App[int]):
 
         body = self.query_one("#app-body", Container)
         await body.remove_children()
-        await body.mount(PlaybookMenuScreen(self.defaults, self.showConfigureScreen))
+        await body.mount(
+            PlaybookMenuScreen(
+                self.defaults,
+                self.showConfigureScreen,
+                self.showLaunchScreen,
+            )
+        )
 
-    async def showConfigureScreen(self, entry: PlaybookEntry) -> None:
+    async def showConfigureScreen(
+        self,
+        entry: PlaybookEntry,
+        onDone: DoneHandler | None = None,
+    ) -> None:
         """Show the configure panel for a playbook.
+
+        Args:
+            entry: Playbook selected from the main menu.
+            onDone: Optional callback for returning after configure.
+        """
+
+        body = self.query_one("#app-body", Container)
+        await body.remove_children()
+        await body.mount(
+            ConfigureScreen(
+                self.defaults,
+                entry,
+                onDone or self.showPlaybookMenu,
+            )
+        )
+
+    async def showLaunchScreen(self, entry: PlaybookEntry) -> None:
+        """Show the launch review panel for a playbook.
 
         Args:
             entry: Playbook selected from the main menu.
         """
 
+        async def configureFromLaunch(configEntry: PlaybookEntry) -> None:
+            """Open configure and return to launch afterward.
+
+            Args:
+                configEntry: Playbook entry to configure.
+            """
+
+            await self.showConfigureScreen(configEntry, lambda: self.showLaunchScreen(entry))
+
         body = self.query_one("#app-body", Container)
         await body.remove_children()
-        await body.mount(ConfigureScreen(self.defaults, entry, self.showPlaybookMenu))
+        await body.mount(
+            LaunchScreen(
+                self.defaults,
+                entry,
+                self.showPlaybookMenu,
+                configureFromLaunch,
+            )
+        )
 
 
 def runTui(defaults: RuntimeDefaults) -> int:

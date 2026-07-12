@@ -80,46 +80,50 @@ async def testTuiPlaybookPanelSelectionFollowsCursor(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def testTuiPlaybookPanelActionsNameSelection(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Verify unwired launch selection is quiet for selected playbooks."""
+    """Verify launch action routes the selected playbook."""
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
     (playbookDir / "first.yaml").write_text("# First playbook\n---\n", encoding="utf-8")
     (playbookDir / "second.yaml").write_text("# Second playbook\n---\n", encoding="utf-8")
     defaults = RuntimeDefaults.forProject(tmp_path)
-    messages: list[str] = []
+    launched: list[str] = []
+
+    async def fakeLaunch(entry) -> None:
+        """Capture launch routing."""
+
+        launched.append(entry.name)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
+        menu.onLaunch = fakeLaunch
         table = pilot.app.query_one("#playbook-table", DataTable)
-        monkeypatch.setattr(
-            menu,
-            "notify",
-            lambda message, **kwargs: messages.append(message),
-        )
 
         table.move_cursor(row=1)
-        menu.action_placeholder_launch()
+        await menu.action_launch()
 
-        assert messages == []
+        assert launched == ["second"]
 
 
 @pytest.mark.asyncio
 async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Verify table row selection stays quiet until launch is wired."""
+    """Verify table row selection routes to the launch action."""
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
     (playbookDir / "first.yaml").write_text("# First playbook\n---\n", encoding="utf-8")
     (playbookDir / "second.yaml").write_text("# Second playbook\n---\n", encoding="utf-8")
     defaults = RuntimeDefaults.forProject(tmp_path)
-    messages: list[str] = []
+    launched: list[str] = []
+
+    async def fakeLaunch(entry) -> None:
+        """Capture launch routing."""
+
+        launched.append(entry.name)
 
     class FakeRowSelected:
         """Minimal row-selected event for direct handler testing."""
@@ -129,14 +133,10 @@ async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
+        menu.onLaunch = fakeLaunch
         table = pilot.app.query_one("#playbook-table", DataTable)
-        monkeypatch.setattr(
-            menu,
-            "notify",
-            lambda message, **kwargs: messages.append(message),
-        )
 
         table.move_cursor(row=1)
-        menu.on_data_table_row_selected(FakeRowSelected())
+        await menu.on_data_table_row_selected(FakeRowSelected())
 
-        assert messages == []
+        assert launched == ["second"]

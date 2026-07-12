@@ -27,6 +27,7 @@ from ansibleRunner.playbooks.models import PlaybookEntry
 
 
 ConfigureHandler = Callable[[PlaybookEntry], Awaitable[None]]
+LaunchHandler = Callable[[PlaybookEntry], Awaitable[None]]
 
 
 class PlaybookMenuScreen(Container):
@@ -35,6 +36,7 @@ class PlaybookMenuScreen(Container):
     Args:
         defaults: Resolved project runtime defaults.
         onConfigure: Callback that opens playbook configuration.
+        onLaunch: Callback that opens playbook launch review.
     """
 
     BINDINGS = [
@@ -45,18 +47,21 @@ class PlaybookMenuScreen(Container):
         self,
         defaults: RuntimeDefaults,
         onConfigure: ConfigureHandler | None = None,
+        onLaunch: LaunchHandler | None = None,
     ) -> None:
         """Initialize the playbook menu screen.
 
         Args:
             defaults: Resolved project runtime defaults.
             onConfigure: Callback that opens playbook configuration.
+            onLaunch: Callback that opens playbook launch review.
         """
 
         super().__init__(id="playbook-menu")
         self.defaults = defaults
         self.entries: list[PlaybookEntry] = []
         self.onConfigure = onConfigure
+        self.onLaunch = onLaunch
 
     def compose(self) -> ComposeResult:
         """Compose the playbook menu.
@@ -98,15 +103,19 @@ class PlaybookMenuScreen(Container):
 
         table.focus()
 
-    def action_placeholder_launch(self) -> None:
-        """Handle launch selection until the launch flow is implemented."""
+    async def action_launch(self) -> None:
+        """Open the launch review panel for the selected playbook."""
 
         selectedEntry = self.selectedEntry()
         if selectedEntry is None:
             self.notify("No playbook is selected.", severity="warning", title="Launch")
             return
+        if self.onLaunch is None:
+            self.notify("Launch flow is not wired.", title="Coming soon")
+            return
+        await self.onLaunch(selectedEntry)
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle Enter selection from the playbook table.
 
         Args:
@@ -114,7 +123,7 @@ class PlaybookMenuScreen(Container):
         """
 
         event.stop()
-        self.action_placeholder_launch()
+        await self.action_launch()
 
     async def action_configure(self) -> None:
         """Open the configuration panel for the selected playbook."""
