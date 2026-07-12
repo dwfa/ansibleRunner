@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.widgets import DataTable, Static
@@ -24,27 +26,37 @@ from ansibleRunner.playbooks import discoverPlaybookEntries, loadPlaybookConfigs
 from ansibleRunner.playbooks.models import PlaybookEntry
 
 
+ConfigureHandler = Callable[[PlaybookEntry], Awaitable[None]]
+
+
 class PlaybookMenuScreen(Container):
     """Display the project playbook menu.
 
     Args:
         defaults: Resolved project runtime defaults.
+        onConfigure: Callback that opens playbook configuration.
     """
 
     BINDINGS = [
-        ("c", "placeholder_configure", "Configure"),
+        ("c", "configure", "Configure"),
     ]
 
-    def __init__(self, defaults: RuntimeDefaults) -> None:
+    def __init__(
+        self,
+        defaults: RuntimeDefaults,
+        onConfigure: ConfigureHandler | None = None,
+    ) -> None:
         """Initialize the playbook menu screen.
 
         Args:
             defaults: Resolved project runtime defaults.
+            onConfigure: Callback that opens playbook configuration.
         """
 
         super().__init__(id="playbook-menu")
         self.defaults = defaults
         self.entries: list[PlaybookEntry] = []
+        self.onConfigure = onConfigure
 
     def compose(self) -> ComposeResult:
         """Compose the playbook menu.
@@ -87,16 +99,12 @@ class PlaybookMenuScreen(Container):
         table.focus()
 
     def action_placeholder_launch(self) -> None:
-        """Show a placeholder launch notification for the first TUI slice."""
+        """Handle launch selection until the launch flow is implemented."""
 
         selectedEntry = self.selectedEntry()
         if selectedEntry is None:
             self.notify("No playbook is selected.", severity="warning", title="Launch")
             return
-        self.notify(
-            f"Launch flow for {selectedEntry.name} is not wired in this slice.",
-            title="Coming soon",
-        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle Enter selection from the playbook table.
@@ -108,17 +116,17 @@ class PlaybookMenuScreen(Container):
         event.stop()
         self.action_placeholder_launch()
 
-    def action_placeholder_configure(self) -> None:
-        """Show a placeholder configure notification for the first TUI slice."""
+    async def action_configure(self) -> None:
+        """Open the configuration panel for the selected playbook."""
 
         selectedEntry = self.selectedEntry()
         if selectedEntry is None:
             self.notify("No playbook is selected.", severity="warning", title="Configure")
             return
-        self.notify(
-            f"Configure flow for {selectedEntry.name} is not wired in this slice.",
-            title="Coming soon",
-        )
+        if self.onConfigure is None:
+            self.notify("Configure flow is not wired.", title="Coming soon")
+            return
+        await self.onConfigure(selectedEntry)
 
     def selectedEntry(self) -> PlaybookEntry | None:
         """Return the currently highlighted playbook entry.

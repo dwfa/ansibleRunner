@@ -83,7 +83,7 @@ async def testTuiPlaybookPanelActionsNameSelection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Verify launch and configure placeholders name the selected playbook."""
+    """Verify unwired launch selection is quiet for selected playbooks."""
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
@@ -103,12 +103,8 @@ async def testTuiPlaybookPanelActionsNameSelection(
 
         table.move_cursor(row=1)
         menu.action_placeholder_launch()
-        menu.action_placeholder_configure()
 
-        assert messages == [
-            "Launch flow for second is not wired in this slice.",
-            "Configure flow for second is not wired in this slice.",
-        ]
+        assert messages == []
 
 
 @pytest.mark.asyncio
@@ -116,7 +112,7 @@ async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Verify table row selection routes to the launch action."""
+    """Verify table row selection stays quiet until launch is wired."""
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
@@ -143,4 +139,4 @@ async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
         table.move_cursor(row=1)
         menu.on_data_table_row_selected(FakeRowSelected())
 
-        assert messages == ["Launch flow for second is not wired in this slice."]
+        assert messages == []
