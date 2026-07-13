@@ -17,16 +17,19 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import RichLog, Static
 
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig
 from ansibleRunner.playbooks.playbookConfig import savePlaybookConfigs
 from ansibleRunner.tui.app import AnsibleRunnerTui
+from ansibleRunner.tui.launch.screen import LaunchScreen
 from ansibleRunner.tui.run.screen import RunScreen
 
 
@@ -82,6 +85,213 @@ async def testTuiRunPanelRunsSelectedPlaybook(
         assert "nodes=web" in logText
 
 
+@pytest.mark.asyncio
+async def testTuiRunPanelCanCancelActiveRun(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify c cancels an active run and then allows returning to launch."""
+
+    _writeSlowFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        pilot.app.query_one("#run-log", RichLog).focus()
+
+        await pilot.press("c")
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runStatus = pilot.app.query_one("#run-status", Static)
+
+        assert str(runStatus.content) == "Finished: canceled"
+        assert runScreen.result is not None
+        assert runScreen.result.returnCode == 130
+
+        await pilot.press("escape")
+
+        assert pilot.app.query_one("#launch-menu", LaunchScreen)
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelEnterSendsInputToActiveRun(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Enter on the run panel forwards input to the process."""
+
+    _writeInputFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        pilot.app.query_one("#run-log", RichLog).focus()
+
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runStatus = pilot.app.query_one("#run-status", Static)
+        runLog = pilot.app.query_one("#run-log", RichLog)
+        logText = "\n".join(str(line) for line in runLog.lines)
+
+        assert str(runStatus.content) == "Finished: success"
+        assert runScreen.result is not None
+        assert runScreen.result.returnCode == 0
+        assert "waiting for input" in logText
+        assert "continued" in logText
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelEscapeCancelsActiveRunAndStaysInApp(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Esc cancels an active run without leaving the app."""
+
+    _writeSlowFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        pilot.app.query_one("#run-log", RichLog).focus()
+        await pilot.press("escape")
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runStatus = pilot.app.query_one("#run-status", Static)
+
+        assert str(runStatus.content) == "Finished: canceled"
+        assert runScreen.result is not None
+        assert runScreen.result.returnCode == 130
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelQuitCancelsActiveRunAndStaysInApp(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify q cancels an active run without leaving the app."""
+
+    _writeSlowFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        pilot.app.query_one("#run-log", RichLog).focus()
+        await pilot.press("q")
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runStatus = pilot.app.query_one("#run-status", Static)
+
+        assert str(runStatus.content) == "Finished: canceled"
+        assert runScreen.result is not None
+        assert runScreen.result.returnCode == 130
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelCtrlCExitsProcessCleanly(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Ctrl-C cancels the active run and exits with code 130."""
+
+    _writeSlowFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+    exitCodes: list[int] = []
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        monkeypatch.setattr(
+            pilot.app,
+            "exit",
+            lambda result=None, return_code=0, message=None: exitCodes.append(
+                return_code
+            ),
+        )
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        pilot.app.query_one("#run-log", RichLog).focus()
+        pilot.app.action_help_quit()
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+
+        assert exitCodes == [130]
+        assert runScreen.result is not None
+        assert runScreen.result.returnCode == 130
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelCtrlZSendsSuspendToApp(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Ctrl-Z delegates to Textual suspend handling."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+    suspended: list[bool] = []
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        monkeypatch.setattr(
+            pilot.app,
+            "action_suspend_process",
+            lambda: suspended.append(True),
+        )
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        pilot.app.query_one("#run-log", RichLog).focus()
+        await pilot.press("ctrl+z")
+
+        assert suspended == [True]
+
+
 def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
     """Write a fake ansible-playbook executable into a temporary PATH."""
 
@@ -98,4 +308,58 @@ def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
         encoding="utf-8",
     )
     executable.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}")
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeInputFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook executable that waits for input."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import sys
+
+            print("waiting for input", flush=True)
+            sys.stdin.readline()
+            print("continued", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeSlowFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook executable that waits for cancellation."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import signal
+            import sys
+            import time
+
+            def stop(signum, frame):
+                print("stopped", flush=True)
+                sys.exit(130)
+
+            signal.signal(signal.SIGTERM, stop)
+            print("started", flush=True)
+            while True:
+                time.sleep(1)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")

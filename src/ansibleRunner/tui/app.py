@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header
 
 from ansibleRunner.defaults import RuntimeDefaults
@@ -183,6 +184,7 @@ class AnsibleRunnerTui(App[int]):
     """
 
     BINDINGS = [
+        ("ctrl+c", "interrupt_process", "Interrupt"),
         ("escape", "quit", "Quit"),
         ("q", "quit", "Quit"),
     ]
@@ -214,6 +216,21 @@ class AnsibleRunnerTui(App[int]):
         """Mount the initial playbook menu."""
 
         await self.showPlaybookMenu()
+
+    def action_interrupt_process(self) -> None:
+        """Interrupt the active run or exit the app."""
+
+        try:
+            runScreen = self.query_one("#run-menu", RunScreen)
+        except NoMatches:
+            self.exit(return_code=130)
+            return
+        runScreen.action_interrupt_process()
+
+    def action_help_quit(self) -> None:
+        """Handle Textual's built-in Ctrl-C binding."""
+
+        self.action_interrupt_process()
 
     async def showPlaybookMenu(self) -> None:
         """Show the main playbook menu."""

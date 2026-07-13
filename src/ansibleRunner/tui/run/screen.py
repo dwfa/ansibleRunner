@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
@@ -26,7 +27,7 @@ from textual.widgets import RichLog, Static
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig, PlaybookEntry
 from ansibleRunner.playbooks.playbookConfig import buildRunnerArgv
-from ansibleRunner.runner import AnsibleCommandRunner, RunnerResult
+from ansibleRunner.runner import AnsibleCommandRunner, RunControl, RunnerResult
 
 
 BackHandler = Callable[[], Awaitable[None]]
@@ -46,8 +47,12 @@ class RunScreen(Container):
     """
 
     BINDINGS = [
-        Binding("escape", "back", "Back"),
-        Binding("q", "back", "Back"),
+        Binding("enter", "send_enter", "Enter", priority=True),
+        Binding("c", "cancel", "Cancel", priority=True),
+        Binding("ctrl+c", "cancel", "Cancel", priority=True),
+        Binding("ctrl+z", "suspend_process", "Suspend", priority=True),
+        Binding("escape", "back", "Back", priority=True),
+        Binding("q", "back", "Back", priority=True),
     ]
     can_focus = True
 
@@ -69,7 +74,9 @@ class RunScreen(Container):
         self.entry = entry
         self.onBack = onBack
         self.result: RunnerResult | None = None
+        self.runControl = RunControl()
         self.runnerFactory = runnerFactory or self._defaultRunnerFactory
+        self.running = False
 
     def compose(self) -> ComposeResult:
         """Compose the run panel.
@@ -88,18 +95,82 @@ class RunScreen(Container):
                 yield Static(self.argsDisplay, id="run-args-value")
             yield Static("Starting ...", id="run-status")
             yield RichLog(id="run-log", wrap=True, highlight=False, markup=False)
-            yield Static("q/Esc back", id="run-help")
+            yield Static(
+                "Enter input  c cancel  Ctrl-C exit  Ctrl-Z suspend  q/Esc cancel",
+                id="run-help",
+            )
 
     def on_mount(self) -> None:
         """Start the playbook run after mount."""
 
         self.focus()
+        self.running = True
         self.run_worker(self._runPlaybook, thread=True)
 
     async def action_back(self) -> None:
         """Return to the launch screen."""
 
+        if self.running:
+            self.action_cancel()
+            return
         await self.onBack()
+
+    async def on_key(self, event: events.Key) -> None:
+        """Handle run-screen keys even when a child widget has focus.
+
+        Args:
+            event: Key event emitted by Textual.
+        """
+
+        if event.key == "ctrl+c":
+            event.stop()
+            event.prevent_default()
+            self.action_interrupt_process()
+        elif event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self.action_send_enter()
+        elif event.key == "c":
+            event.stop()
+            event.prevent_default()
+            self.action_cancel()
+        elif event.key == "ctrl+z":
+            event.stop()
+            event.prevent_default()
+            self.action_suspend_process()
+        elif event.key in {"escape", "q"}:
+            event.stop()
+            event.prevent_default()
+            await self.action_back()
+
+    def action_cancel(self) -> None:
+        """Cancel the active run."""
+
+        if not self.running:
+            return
+        self.query_one("#run-status", Static).update("Canceling ...")
+        self._appendOutput("Cancel requested.")
+        self.runControl.cancel()
+
+    def action_interrupt_process(self) -> None:
+        """Cancel the active run and exit the TUI process."""
+
+        if self.running:
+            self.query_one("#run-status", Static).update("Interrupting ...")
+            self._appendOutput("Interrupt requested.")
+            self.runControl.cancel()
+        self.app.exit(return_code=130)
+
+    def action_send_enter(self) -> None:
+        """Send an Enter keypress to the running playbook."""
+
+        if self.running:
+            self.runControl.sendInput("\n")
+
+    def action_suspend_process(self) -> None:
+        """Suspend the TUI process using Textual's app-level handler."""
+
+        self.app.action_suspend_process()
 
     def _appendOutputFromThread(self, line: str) -> None:
         """Append runner output from a worker thread.
@@ -141,9 +212,14 @@ class RunScreen(Container):
         """
 
         self.result = result
+        self.running = False
         status = self.query_one("#run-status", Static)
+        helpText = self.query_one("#run-help", Static)
+        helpText.update("q/Esc back")
         if result.returnCode == 0:
             status.update("Finished: success")
+        elif result.returnCode == 130:
+            status.update("Finished: canceled")
         else:
             status.update(f"Finished: failed ({result.returnCode})")
         if result.stderr:
@@ -175,5 +251,6 @@ class RunScreen(Container):
             options,
             echoOutput=False,
             outputHandler=self._appendOutputFromThread,
+            runControl=self.runControl,
         )
         self.app.call_from_thread(self._finishRun, result)

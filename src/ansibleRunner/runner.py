@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -106,6 +107,77 @@ class RunnerResult:
         """
 
         return RunProgress.finished(self.returnCode)
+
+
+class RunControl:
+    """Runtime control for a running subprocess."""
+
+    def __init__(self) -> None:
+        """Initialize run cancellation state."""
+
+        self._cancelled = False
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen[str] | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        """Return whether cancellation has been requested.
+
+        Returns:
+            True when cancellation has been requested.
+        """
+
+        with self._lock:
+            return self._cancelled
+
+    def bind(self, process: subprocess.Popen[str]) -> None:
+        """Bind the active subprocess to this run control.
+
+        Args:
+            process: Process to cancel when requested.
+        """
+
+        with self._lock:
+            self._process = process
+            shouldCancel = self._cancelled
+        if shouldCancel:
+            self.cancel()
+
+    def cancel(self) -> None:
+        """Request cancellation of the active process."""
+
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    def clear(self) -> None:
+        """Clear the active subprocess after completion."""
+
+        with self._lock:
+            self._process = None
+
+    def sendInput(self, value: str) -> bool:
+        """Send input to the active subprocess.
+
+        Args:
+            value: Text to write to subprocess standard input.
+
+        Returns:
+            True when the input was sent to a running process.
+        """
+
+        with self._lock:
+            process = self._process
+        if process is None or process.poll() is not None or process.stdin is None:
+            return False
+        try:
+            process.stdin.write(value)
+            process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+        return True
 
 
 class AnsibleCommandRunner:
@@ -290,6 +362,7 @@ class AnsibleCommandRunner:
         progressMode: bool = False,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
+        runControl: RunControl | None = None,
     ) -> RunnerResult:
         """Run one project playbook with wrapper-style Ansible defaults.
 
@@ -300,6 +373,7 @@ class AnsibleCommandRunner:
             progressMode: Reserved for future TUI progress rendering.
             outputHandler: Optional callback for each merged output line.
             echoOutput: Whether to echo merged output to stdout.
+            runControl: Optional process cancellation control.
 
         Returns:
             Captured playbook run result.
@@ -340,7 +414,14 @@ class AnsibleCommandRunner:
         )
         self._writeOutput(f"Logging to {logPath}\n", outputHandler, echoOutput)
 
-        returnCode = self._execAndTee(command, env, logPath, outputHandler, echoOutput)
+        returnCode = self._execAndTee(
+            command,
+            env,
+            logPath,
+            outputHandler,
+            echoOutput,
+            runControl,
+        )
         return RunnerResult(
             command=command,
             returnCode=returnCode,
@@ -403,6 +484,7 @@ class AnsibleCommandRunner:
         logPath: Path,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
+        runControl: RunControl | None = None,
     ) -> int:
         """Execute a command and tee merged output to stdout and a log.
 
@@ -412,6 +494,7 @@ class AnsibleCommandRunner:
             logPath: File where merged output should be written.
             outputHandler: Optional callback for each merged output line.
             echoOutput: Whether to echo merged output to stdout.
+            runControl: Optional process cancellation control.
 
         Returns:
             Subprocess return code.
@@ -424,13 +507,21 @@ class AnsibleCommandRunner:
                 cwd=self.projectRoot,
                 env=env,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 text=True,
             )
+            if runControl is not None:
+                runControl.bind(process)
             assert process.stdout is not None
             self._teeOutput(process.stdout, logFile, outputHandler, echoOutput)
             process.stdout.close()
-            return process.wait()
+            returnCode = process.wait()
+            if runControl is not None:
+                runControl.clear()
+                if runControl.cancelled:
+                    return 130
+            return returnCode
 
     def _resolvePlaybookPath(self, playbook: str | Path) -> Path:
         """Resolve a playbook path for filesystem validation.
