@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Awaitable, Callable
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
@@ -33,6 +35,8 @@ from ansibleRunner.playbooks.playbookConfig import (
 
 BackHandler = Callable[[], Awaitable[None]]
 ConfigureHandler = Callable[[PlaybookEntry], Awaitable[None]]
+EditOnceHandler = Callable[[PlaybookEntry, PlaybookConfig], Awaitable[None]]
+RunHandler = Callable[[PlaybookEntry, PlaybookConfig, str | Text], Awaitable[None]]
 
 
 class LaunchScreen(Container):
@@ -48,11 +52,12 @@ class LaunchScreen(Container):
     BINDINGS = [
         Binding("enter", "run_placeholder", "Run"),
         Binding("r", "run_placeholder", "Run"),
-        Binding("e", "edit_once_placeholder", "Edit once"),
+        Binding("e", "edit_once", "Edit once"),
         Binding("c", "configure", "Configure"),
         Binding("escape", "back", "Back"),
         Binding("q", "back", "Back"),
     ]
+    can_focus = True
 
     def __init__(
         self,
@@ -60,6 +65,10 @@ class LaunchScreen(Container):
         entry: PlaybookEntry,
         onBack: BackHandler,
         onConfigure: ConfigureHandler,
+        onEditOnce: EditOnceHandler,
+        onRun: RunHandler,
+        config: PlaybookConfig | None = None,
+        isEditOnce: bool = False,
     ) -> None:
         """Initialize the launch screen.
 
@@ -68,13 +77,21 @@ class LaunchScreen(Container):
             entry: Selected playbook entry.
             onBack: Callback that returns to the playbook menu.
             onConfigure: Callback that opens saved configuration.
+            onEditOnce: Callback that opens one-run configuration.
+            onRun: Callback that starts a playbook run.
+            config: Optional launch config override.
+            isEditOnce: Whether config contains one-run overrides.
         """
 
         super().__init__(id="launch-menu")
-        self.config = self._loadConfig(defaults, entry)
+        self.savedConfig = self._loadConfig(defaults, entry)
+        self.config = config or self.savedConfig
         self.entry = entry
+        self.isEditOnce = isEditOnce
         self.onBack = onBack
         self.onConfigure = onConfigure
+        self.onEditOnce = onEditOnce
+        self.onRun = onRun
 
     def compose(self) -> ComposeResult:
         """Compose the launch review panel.
@@ -98,12 +115,12 @@ class LaunchScreen(Container):
         """Populate launch review details."""
 
         table = self.query_one("#launch-table", DataTable)
-        table.cursor_type = "row"
+        table.cursor_type = "none"
         table.show_header = False
         table.zebra_stripes = True
         table.add_columns("Item", "Value")
-        table.add_row("Args", self._runnerArgvText())
-        table.focus()
+        table.add_row("Args", self._runnerArgvDisplay())
+        self.focus()
 
     async def action_back(self) -> None:
         """Return to the playbook menu."""
@@ -115,15 +132,15 @@ class LaunchScreen(Container):
 
         await self.onConfigure(self.entry)
 
-    def action_edit_once_placeholder(self) -> None:
-        """Show placeholder for edit-once launch configuration."""
+    async def action_edit_once(self) -> None:
+        """Open one-run launch configuration."""
 
-        self.notify("Edit-once launch options are not wired yet.", title="Coming soon")
+        await self.onEditOnce(self.entry, self.config)
 
-    def action_run_placeholder(self) -> None:
-        """Show placeholder for playbook execution."""
+    async def action_run_placeholder(self) -> None:
+        """Start playbook execution."""
 
-        self.notify("Run execution is not wired yet.", title="Coming soon")
+        await self.onRun(self.entry, self.config, self._runnerArgvDisplay())
 
     def _loadConfig(
         self,
@@ -166,3 +183,83 @@ class LaunchScreen(Container):
         if not argv:
             return "(none)"
         return " ".join(argv)
+
+    def _runnerArgvDisplay(self) -> str | Text:
+        """Build styled display content for the runner arguments.
+
+        Returns:
+            Plain argument text, with one-run argument groups highlighted.
+        """
+
+        if not self.isEditOnce:
+            return self._runnerArgvText()
+
+        return self._styledRunnerArgv()
+
+    def _appendArgGroup(
+        self,
+        text: Text,
+        parts: list[str],
+        isEditOnce: bool,
+    ) -> None:
+        """Append a command argument group to display text.
+
+        Args:
+            text: Rich text buffer receiving the argument group.
+            parts: Argument parts in this logical group.
+            isEditOnce: Whether this group is only for the current run.
+        """
+
+        if not parts:
+            return
+        if text.plain:
+            text.append(" ")
+        style = "bold cyan" if isEditOnce else ""
+        text.append(shlex.join(parts), style=style)
+
+    def _styledRunnerArgv(self) -> Text:
+        """Build argument display text with only one-run groups highlighted.
+
+        Returns:
+            Rich text for the final launch arguments.
+        """
+
+        text = Text()
+        self._appendArgGroup(
+            text,
+            ["-d"] if self.config.debug else [],
+            self.config.debug != self.savedConfig.debug,
+        )
+        self._appendArgGroup(
+            text,
+            ["-c"] if self.config.check else [],
+            self.config.check != self.savedConfig.check,
+        )
+        self._appendArgGroup(
+            text,
+            ["-s"] if self.config.syntaxCheck else [],
+            self.config.syntaxCheck != self.savedConfig.syntaxCheck,
+        )
+        self._appendArgGroup(
+            text,
+            ["-t"] if self.config.listTasks else [],
+            self.config.listTasks != self.savedConfig.listTasks,
+        )
+        self._appendArgGroup(
+            text,
+            ["-n", self.config.node] if self.config.node else [],
+            self.config.node != self.savedConfig.node,
+        )
+        self._appendArgGroup(
+            text,
+            ["--output-level", self.config.outputLevel],
+            self.config.outputLevel != self.savedConfig.outputLevel,
+        )
+        self._appendArgGroup(
+            text,
+            list(self.config.extraArgs),
+            self.config.extraArgs != self.savedConfig.extraArgs,
+        )
+        if not text.plain:
+            text.append("(none)")
+        return text

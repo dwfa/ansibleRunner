@@ -78,6 +78,30 @@ def testRunChainStopsAtFirstFailure(tmp_path: Path, monkeypatch: Any) -> None:
     assert result == 7
 
 
+def testRunPlaybookSendsMergedOutputToHandler(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify a playbook run sends merged output to a callback."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    playbook = tmp_path / "playbooks" / "site.yaml"
+    playbook.parent.mkdir()
+    playbook.write_text("---\n", encoding="utf-8")
+    outputLines: list[str] = []
+
+    runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
+    result = runner.runPlaybook(
+        "playbooks/site.yaml",
+        "web",
+        outputHandler=outputLines.append,
+    )
+
+    assert result.returnCode == 0
+    assert any("cwd=" + str(tmp_path) in line for line in outputLines)
+    assert any("nodes=web" in line for line in outputLines)
+
+
 def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
     """Write a fake ansible-playbook executable into a temporary PATH."""
 

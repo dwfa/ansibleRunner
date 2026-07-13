@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +29,9 @@ from typing import TextIO
 
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.progress import RunProgress
+
+
+OutputHandler = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -285,6 +288,8 @@ class AnsibleCommandRunner:
         defaultNode: str,
         options: RunnerOptions | None = None,
         progressMode: bool = False,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
     ) -> RunnerResult:
         """Run one project playbook with wrapper-style Ansible defaults.
 
@@ -293,6 +298,8 @@ class AnsibleCommandRunner:
             defaultNode: Default node/group used when no override is provided.
             options: Parsed runner options.
             progressMode: Reserved for future TUI progress rendering.
+            outputHandler: Optional callback for each merged output line.
+            echoOutput: Whether to echo merged output to stdout.
 
         Returns:
             Captured playbook run result.
@@ -326,10 +333,14 @@ class AnsibleCommandRunner:
         command = self.buildPlaybookCommand(playbook, node, runnerOptions)
         env = self._buildEnv(runnerOptions)
 
-        print(f"Running {Path(playbook).stem} playbook ...")
-        print(f"Logging to {logPath}")
+        self._writeOutput(
+            f"Running {Path(playbook).stem} playbook ...\n",
+            outputHandler,
+            echoOutput,
+        )
+        self._writeOutput(f"Logging to {logPath}\n", outputHandler, echoOutput)
 
-        returnCode = self._execAndTee(command, env, logPath)
+        returnCode = self._execAndTee(command, env, logPath, outputHandler, echoOutput)
         return RunnerResult(
             command=command,
             returnCode=returnCode,
@@ -390,6 +401,8 @@ class AnsibleCommandRunner:
         command: Sequence[str],
         env: dict[str, str],
         logPath: Path,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
     ) -> int:
         """Execute a command and tee merged output to stdout and a log.
 
@@ -397,6 +410,8 @@ class AnsibleCommandRunner:
             command: Command and arguments to execute.
             env: Environment for the subprocess.
             logPath: File where merged output should be written.
+            outputHandler: Optional callback for each merged output line.
+            echoOutput: Whether to echo merged output to stdout.
 
         Returns:
             Subprocess return code.
@@ -413,7 +428,7 @@ class AnsibleCommandRunner:
                 text=True,
             )
             assert process.stdout is not None
-            self._teeOutput(process.stdout, logFile)
+            self._teeOutput(process.stdout, logFile, outputHandler, echoOutput)
             process.stdout.close()
             return process.wait()
 
@@ -450,15 +465,44 @@ class AnsibleCommandRunner:
         return RuntimeDefaults.forProject(self.projectRoot).logDir
 
     @staticmethod
-    def _teeOutput(source: TextIO, logFile: TextIO) -> None:
+    def _teeOutput(
+        source: TextIO,
+        logFile: TextIO,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
+    ) -> None:
         """Write subprocess output to stdout and a log file.
 
         Args:
             source: Text stream from the subprocess.
             logFile: Writable log file stream.
+            outputHandler: Optional callback for each merged output line.
+            echoOutput: Whether to echo merged output to stdout.
         """
 
         for line in source:
-            print(line, end="")
+            if echoOutput:
+                print(line, end="")
             logFile.write(line)
             logFile.flush()
+            if outputHandler is not None:
+                outputHandler(line)
+
+    @staticmethod
+    def _writeOutput(
+        line: str,
+        outputHandler: OutputHandler | None,
+        echoOutput: bool,
+    ) -> None:
+        """Write runner status output to stdout and optional handler.
+
+        Args:
+            line: Output line to emit.
+            outputHandler: Optional callback for the output line.
+            echoOutput: Whether to echo the line to stdout.
+        """
+
+        if echoOutput:
+            print(line, end="")
+        if outputHandler is not None:
+            outputHandler(line)

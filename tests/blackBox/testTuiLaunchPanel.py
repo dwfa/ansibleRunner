@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from rich.text import Span, Text
 from textual.containers import Container, Horizontal
 from textual.widgets import DataTable, Static
 
@@ -124,16 +125,15 @@ async def testTuiLaunchPanelBackReturnsToPlaybookList(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def testTuiLaunchPanelConfigureOpensConfigure(tmp_path: Path) -> None:
-    """Verify launch review can jump to saved configuration."""
+    """Verify launch review can jump to saved configuration by key."""
 
     createPlaybook(tmp_path)
     defaults = RuntimeDefaults.forProject(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
-        launchMenu = pilot.app.query_one("#launch-menu", LaunchScreen)
 
-        await launchMenu.action_configure()
+        await pilot.press("c")
 
         configureMenu = pilot.app.query_one("#configure-menu", ConfigureScreen)
 
@@ -162,3 +162,83 @@ async def testTuiLaunchPanelConfigureSaveReturnsToLaunch(tmp_path: Path) -> None
 
         assert str(launchTitle.content) == "site dns"
         assert table.get_cell_at((0, 1)) == "-n dns --output-level role"
+
+
+@pytest.mark.asyncio
+async def testTuiLaunchPanelEditOnceReturnsTemporaryArgs(tmp_path: Path) -> None:
+    """Verify edit-once updates launch args without persisting config."""
+
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("e")
+
+        configureMenu = pilot.app.query_one("#configure-menu", ConfigureScreen)
+        configurePrefix = pilot.app.query_one("#configure-prefix", Static)
+        configureHelp = pilot.app.query_one("#configure-help", Static)
+        configureTable = pilot.app.query_one("#configure-table", DataTable)
+
+        assert str(configurePrefix.content) == "✎ Edit once"
+        assert str(configureHelp.content) == (
+            "↑/↓ move  ←/→ change  Enter edit  a apply  q/Esc back"
+        )
+        assert configureTable.row_count == 7
+        assert configureTable.get_cell_at((6, 1)) == "Ansible arguments"
+
+        configureTable.move_cursor(row=2)
+        configureMenu.action_cycle_right()
+        configureTable.move_cursor(row=6)
+        configureMenu.action_edit_selected()
+        configureMenu.updateTextEditValue("--tags bootstrap")
+        configureMenu.commitTextEdit()
+        await pilot.press("s")
+
+        assert pilot.app.query_one("#configure-menu", ConfigureScreen)
+        await pilot.press("a")
+
+        launchTitle = pilot.app.query_one("#launch-title", Static)
+        launchTable = pilot.app.query_one("#launch-table", DataTable)
+        launchArgs = launchTable.get_cell_at((0, 1))
+
+        assert str(launchTitle.content) == "site"
+        assert isinstance(launchArgs, Text)
+        assert launchArgs.plain == "-d --output-level role --tags bootstrap"
+        assert launchArgs.spans == [
+            Span(0, 2, "bold cyan"),
+            Span(23, 39, "bold cyan"),
+        ]
+        assert not (defaults.stateDir / "playbookConfig.json").exists()
+
+
+@pytest.mark.asyncio
+async def testTuiLaunchPanelEditOnceStylesOnlyTemporaryGroups(
+    tmp_path: Path,
+) -> None:
+    """Verify saved args stay plain when one-run output level changes."""
+
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="preinstaller")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("e")
+
+        configureMenu = pilot.app.query_one("#configure-menu", ConfigureScreen)
+        configureTable = pilot.app.query_one("#configure-table", DataTable)
+
+        configureTable.move_cursor(row=1)
+        configureMenu.action_cycle_right()
+        await pilot.press("a")
+
+        launchTable = pilot.app.query_one("#launch-table", DataTable)
+        launchArgs = launchTable.get_cell_at((0, 1))
+
+        assert isinstance(launchArgs, Text)
+        assert launchArgs.plain == "-n preinstaller --output-level task"
+        assert launchArgs.spans == [Span(16, 35, "bold cyan")]

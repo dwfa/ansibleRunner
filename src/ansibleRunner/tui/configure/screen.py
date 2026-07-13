@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
@@ -36,6 +37,7 @@ from ansibleRunner.playbooks.playbookConfig import (
 
 
 DoneHandler = Callable[[], Awaitable[None]]
+SaveHandler = Callable[[PlaybookConfig], Awaitable[None]]
 
 
 class ConfigureTable(DataTable[str]):
@@ -53,7 +55,7 @@ class ConfigureTable(DataTable[str]):
         """
 
         screen = self._configureScreen()
-        return screen.nodeEditValue is not None and (
+        return screen.textEditValue is not None and (
             character is not None or key in {"backspace", "enter", "escape"}
         )
 
@@ -61,8 +63,8 @@ class ConfigureTable(DataTable[str]):
         """Request edit handling for the selected row."""
 
         screen = self._configureScreen()
-        if screen.nodeEditValue is not None:
-            screen.commitNodeEdit()
+        if screen.textEditValue is not None:
+            screen.commitTextEdit()
             return
         screen.action_edit_selected()
 
@@ -74,19 +76,19 @@ class ConfigureTable(DataTable[str]):
         """
 
         screen = self._configureScreen()
-        if screen.nodeEditValue is None:
+        if screen.textEditValue is None:
             return
 
         event.stop()
         event.prevent_default()
         if event.key == "enter":
-            screen.commitNodeEdit()
+            screen.commitTextEdit()
         elif event.key == "escape":
-            screen.cancelNodeEdit()
+            screen.cancelTextEdit()
         elif event.key == "backspace":
-            screen.updateNodeEditValue(screen.nodeEditValue[:-1])
+            screen.updateTextEditValue(screen.textEditValue[:-1])
         elif event.character:
-            screen.updateNodeEditValue(screen.nodeEditValue + event.character)
+            screen.updateTextEditValue(screen.textEditValue + event.character)
 
     def _configureScreen(self) -> "ConfigureScreen":
         """Return the owning configure screen.
@@ -111,7 +113,6 @@ class ConfigureScreen(Container):
         Binding("left", "cycle_left", "Previous", priority=True),
         Binding("right", "cycle_right", "Next", priority=True),
         Binding("enter", "edit_selected", "Edit"),
-        Binding("s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
         Binding("q", "cancel", "Back"),
     ]
@@ -121,6 +122,12 @@ class ConfigureScreen(Container):
         defaults: RuntimeDefaults,
         entry: PlaybookEntry,
         onDone: DoneHandler,
+        fields: tuple[ConfigField, ...] | None = CONFIG_FIELDS,
+        headingPrefix: str = "⚙ Configure",
+        helpText: str = "↑/↓ move  ←/→ change  Enter edit  s save  q/Esc back",
+        initialConfig: PlaybookConfig | None = None,
+        onSave: SaveHandler | None = None,
+        saveKey: str = "s",
     ) -> None:
         """Initialize the configure screen.
 
@@ -128,15 +135,26 @@ class ConfigureScreen(Container):
             defaults: Resolved project runtime defaults.
             entry: Selected playbook entry.
             onDone: Callback that returns to the playbook menu.
+            fields: Editable fields for this screen.
+            headingPrefix: Prefix shown in the panel heading.
+            helpText: Help text shown below the table.
+            initialConfig: Optional initial config instead of persisted config.
+            onSave: Optional custom save callback.
+            saveKey: Keyboard key used to save or apply changes.
         """
 
         super().__init__(id="configure-menu")
         self.configPath = defaults.stateDir / "playbookConfig.json"
         self.entry = entry
-        self.fields = CONFIG_FIELDS
-        self.nodeEditValue: str | None = None
+        self.fields = fields or CONFIG_FIELDS
+        self.headingPrefix = headingPrefix
+        self.helpText = helpText
         self.onDone = onDone
-        self.workingConfig = self._loadConfig()
+        self.onSave = onSave
+        self.saveKey = saveKey
+        self.textEditField: ConfigField | None = None
+        self.textEditValue: str | None = None
+        self.workingConfig = initialConfig or self._loadConfig()
 
     def compose(self) -> ComposeResult:
         """Compose the configure panel.
@@ -147,14 +165,11 @@ class ConfigureScreen(Container):
 
         with Container(id="configure-panel"):
             with Horizontal(id="configure-heading"):
-                yield Static("⚙ Configure", id="configure-prefix")
+                yield Static(self.headingPrefix, id="configure-prefix")
                 yield Static(self._playbookNameText(), id="configure-title")
                 yield Static(self.entry.title, id="configure-description")
             yield ConfigureTable(id="configure-table")
-            yield Static(
-                "↑/↓ move  ←/→ change  Enter edit  s save  q/Esc back",
-                id="configure-help",
-            )
+            yield Static(self.helpText, id="configure-help")
 
     def on_mount(self) -> None:
         """Populate the configure table after mount."""
@@ -179,15 +194,19 @@ class ConfigureScreen(Container):
     async def action_cancel(self) -> None:
         """Return to the playbook menu without saving."""
 
-        if self.nodeEditValue is not None:
-            self.cancelNodeEdit()
+        if self.textEditValue is not None:
+            self.cancelTextEdit()
             return
         await self.onDone()
 
     async def action_save(self) -> None:
         """Save the current playbook configuration and return to the menu."""
 
-        self.commitNodeEdit()
+        self.commitTextEdit()
+        if self.onSave is not None:
+            await self.onSave(self.workingConfig)
+            return
+
         configs = loadPlaybookConfigs(self.configPath)
         configs[self.entry.name] = self.workingConfig
         savePlaybookConfigs(self.configPath, configs)
@@ -200,11 +219,24 @@ class ConfigureScreen(Container):
         field = self.selectedField()
         if field is None:
             return
-        if field.kind == "string":
-            self.nodeEditValue = str(getattr(self.workingConfig, field.key))
+        if field.kind in {"args", "string"}:
+            self.textEditField = field
+            self.textEditValue = self._editableText(field)
             self._refreshTable()
             return
         self._cycleSelectedField(1)
+
+    @property
+    def nodeEditValue(self) -> str | None:
+        """Return the active node edit value for legacy callers.
+
+        Returns:
+            Node edit value when the node row is being edited.
+        """
+
+        if self.textEditField and self.textEditField.key == "node":
+            return self.textEditValue
+        return None
 
     def selectedField(self) -> ConfigField | None:
         """Return the selected editable table field.
@@ -231,7 +263,7 @@ class ConfigureScreen(Container):
             return
 
         currentValue = getattr(self.workingConfig, field.key)
-        if field.kind == "string":
+        if field.kind in {"args", "string"}:
             return
         elif field.kind == "bool":
             self.workingConfig = replace(
@@ -278,9 +310,11 @@ class ConfigureScreen(Container):
         """
 
         value: Any = getattr(self.workingConfig, field.key)
-        if field.kind == "string":
-            if self.nodeEditValue is not None:
-                return f"{self.nodeEditValue}█"
+        if field.kind in {"args", "string"}:
+            if self.textEditField == field and self.textEditValue is not None:
+                return f"{self.textEditValue}█"
+            if field.kind == "args":
+                return shlex.join(value) if value else ""
             return str(value) if value else ""
         if field.kind == "bool":
             return "yes" if value else "no"
@@ -291,17 +325,14 @@ class ConfigureScreen(Container):
 
         if self.nodeEditValue is None:
             return
-        self.workingConfig = replace(self.workingConfig, node=self.nodeEditValue.strip())
-        self.nodeEditValue = None
-        self._refreshTable()
+        self.commitTextEdit()
 
     def cancelNodeEdit(self) -> None:
         """Cancel the inline node edit."""
 
         if self.nodeEditValue is None:
             return
-        self.nodeEditValue = None
-        self._refreshTable()
+        self.cancelTextEdit()
 
     def updateNodeEditValue(self, value: str) -> None:
         """Update the inline node edit value.
@@ -312,7 +343,49 @@ class ConfigureScreen(Container):
 
         if self.nodeEditValue is None:
             return
-        self.nodeEditValue = value
+        self.textEditValue = value
+        self._refreshTable()
+
+    def commitTextEdit(self) -> None:
+        """Commit the active text edit field into working config."""
+
+        if self.textEditField is None or self.textEditValue is None:
+            return
+
+        field = self.textEditField
+        value = self.textEditValue.strip()
+        if field.kind == "args":
+            try:
+                parsedValue = tuple(shlex.split(value))
+            except ValueError:
+                parsedValue = tuple(self.workingConfig.extraArgs)
+            self.workingConfig = replace(self.workingConfig, **{field.key: parsedValue})
+        else:
+            self.workingConfig = replace(self.workingConfig, **{field.key: value})
+
+        self.textEditField = None
+        self.textEditValue = None
+        self._refreshTable()
+
+    def cancelTextEdit(self) -> None:
+        """Cancel the active text edit field."""
+
+        if self.textEditValue is None:
+            return
+        self.textEditField = None
+        self.textEditValue = None
+        self._refreshTable()
+
+    def updateTextEditValue(self, value: str) -> None:
+        """Update the active text edit value.
+
+        Args:
+            value: Updated text value.
+        """
+
+        if self.textEditValue is None:
+            return
+        self.textEditValue = value
         self._refreshTable()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -325,26 +398,32 @@ class ConfigureScreen(Container):
         event.stop()
         self.action_edit_selected()
 
-    def on_key(self, event: events.Key) -> None:
+    async def on_key(self, event: events.Key) -> None:
         """Handle inline node edit keystrokes.
 
         Args:
             event: Key event from Textual.
         """
 
-        if self.nodeEditValue is None:
+        if self.textEditValue is None and event.key == self.saveKey:
+            event.stop()
+            event.prevent_default()
+            await self.action_save()
+            return
+
+        if self.textEditValue is None:
             return
 
         event.stop()
         event.prevent_default()
         if event.key == "enter":
-            self.commitNodeEdit()
+            self.commitTextEdit()
         elif event.key == "escape":
-            self.cancelNodeEdit()
+            self.cancelTextEdit()
         elif event.key == "backspace":
-            self.updateNodeEditValue(self.nodeEditValue[:-1])
+            self.updateTextEditValue(self.textEditValue[:-1])
         elif event.character:
-            self.updateNodeEditValue(self.nodeEditValue + event.character)
+            self.updateTextEditValue(self.textEditValue + event.character)
 
     def _loadConfig(self) -> PlaybookConfig:
         """Load the saved config for the selected playbook.
@@ -378,3 +457,18 @@ class ConfigureScreen(Container):
         if self.workingConfig.node:
             titleParts.append(self.workingConfig.node)
         return " ".join(titleParts)
+
+    def _editableText(self, field: ConfigField) -> str:
+        """Return editable text for a text-like config field.
+
+        Args:
+            field: Text-like config field.
+
+        Returns:
+            Editable field text.
+        """
+
+        value: Any = getattr(self.workingConfig, field.key)
+        if field.kind == "args":
+            return shlex.join(value) if value else ""
+        return str(value)
