@@ -19,7 +19,11 @@
 from __future__ import annotations
 
 import argparse
+import codecs
+import errno
 import os
+import select
+import signal
 import subprocess
 import threading
 from collections.abc import Callable, Sequence
@@ -32,6 +36,7 @@ from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.progress import RunProgress
 
 
+InputWriter = Callable[[str], bool]
 OutputHandler = Callable[[str], None]
 
 
@@ -116,6 +121,8 @@ class RunControl:
         """Initialize run cancellation state."""
 
         self._cancelled = False
+        self._cancelProcessGroup = False
+        self._inputWriter: InputWriter | None = None
         self._lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
 
@@ -130,14 +137,23 @@ class RunControl:
         with self._lock:
             return self._cancelled
 
-    def bind(self, process: subprocess.Popen[str]) -> None:
+    def bind(
+        self,
+        process: subprocess.Popen[str],
+        inputWriter: InputWriter | None = None,
+        cancelProcessGroup: bool = False,
+    ) -> None:
         """Bind the active subprocess to this run control.
 
         Args:
+            cancelProcessGroup: Whether cancellation targets the process group.
+            inputWriter: Optional writer for process input.
             process: Process to cancel when requested.
         """
 
         with self._lock:
+            self._cancelProcessGroup = cancelProcessGroup
+            self._inputWriter = inputWriter
             self._process = process
             shouldCancel = self._cancelled
         if shouldCancel:
@@ -148,14 +164,23 @@ class RunControl:
 
         with self._lock:
             self._cancelled = True
+            cancelProcessGroup = self._cancelProcessGroup
             process = self._process
         if process is not None and process.poll() is None:
+            if cancelProcessGroup and os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    return
+                except (OSError, ProcessLookupError):
+                    pass
             process.terminate()
 
     def clear(self) -> None:
         """Clear the active subprocess after completion."""
 
         with self._lock:
+            self._cancelProcessGroup = False
+            self._inputWriter = None
             self._process = None
 
     def sendInput(self, value: str) -> bool:
@@ -169,7 +194,10 @@ class RunControl:
         """
 
         with self._lock:
+            inputWriter = self._inputWriter
             process = self._process
+        if inputWriter is not None:
+            return inputWriter(value)
         if process is None or process.poll() is not None or process.stdin is None:
             return False
         try:
@@ -530,6 +558,16 @@ class AnsibleCommandRunner:
         """
 
         logPath.parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            return self._execAndTeePty(
+                command,
+                env,
+                logPath,
+                outputHandler,
+                echoOutput,
+                runControl,
+            )
+
         with logPath.open("w", encoding="utf-8") as logFile:
             process = subprocess.Popen(
                 list(command),
@@ -551,6 +589,89 @@ class AnsibleCommandRunner:
                 if runControl.cancelled:
                     return 130
             return returnCode
+
+    def _execAndTeePty(
+        self,
+        command: Sequence[str],
+        env: dict[str, str],
+        logPath: Path,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
+        runControl: RunControl | None = None,
+    ) -> int:
+        """Execute a command through a PTY and tee merged output.
+
+        Args:
+            command: Command and arguments to execute.
+            env: Environment for the subprocess.
+            logPath: File where merged output should be written.
+            outputHandler: Optional callback for each merged output line.
+            echoOutput: Whether to echo merged output to stdout.
+            runControl: Optional process cancellation and input control.
+
+        Returns:
+            Subprocess return code.
+        """
+
+        import pty
+        import fcntl
+        import termios
+
+        masterFd, slaveFd = pty.openpty()
+
+        def prepareChildPty() -> None:
+            """Make the PTY slave the child process controlling terminal."""
+
+            os.setsid()
+            fcntl.ioctl(slaveFd, termios.TIOCSCTTY, 0)
+
+        def writeInput(value: str) -> bool:
+            """Write input to the PTY master file descriptor."""
+
+            try:
+                os.write(masterFd, value.encode("utf-8"))
+            except OSError:
+                return False
+            return True
+
+        with logPath.open("w", encoding="utf-8") as logFile:
+            process = subprocess.Popen(
+                list(command),
+                close_fds=True,
+                cwd=self.projectRoot,
+                env=env,
+                preexec_fn=prepareChildPty,
+                stderr=slaveFd,
+                stdin=slaveFd,
+                stdout=slaveFd,
+            )
+            os.close(slaveFd)
+            if runControl is not None:
+                runControl.bind(
+                    process,
+                    writeInput,
+                    cancelProcessGroup=True,
+                )
+            try:
+                self._teePtyOutput(
+                    masterFd,
+                    process,
+                    logFile,
+                    outputHandler,
+                    echoOutput,
+                )
+                returnCode = process.wait()
+            finally:
+                if runControl is not None:
+                    runControl.clear()
+                try:
+                    os.close(masterFd)
+                except OSError:
+                    pass
+
+        if runControl is not None and runControl.cancelled:
+            return 130
+        return returnCode
 
     def _resolvePlaybookPath(self, playbook: str | Path) -> Path:
         """Resolve a playbook path for filesystem validation.
@@ -583,6 +704,95 @@ class AnsibleCommandRunner:
         if envLogDir:
             return Path(envLogDir).expanduser()
         return RuntimeDefaults.forProject(self.projectRoot).logDir
+
+    @staticmethod
+    def _cleanPtyText(text: str) -> str:
+        """Normalize PTY text before logging or parsing.
+
+        Args:
+            text: Raw decoded PTY text.
+
+        Returns:
+            Text with carriage returns normalized.
+        """
+
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _emitOutput(
+        self,
+        text: str,
+        logFile: TextIO,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
+    ) -> None:
+        """Emit output to stdout, a log file, and an optional callback.
+
+        Args:
+            text: Text to emit.
+            logFile: Writable log file stream.
+            outputHandler: Optional callback for output text.
+            echoOutput: Whether to echo output to stdout.
+        """
+
+        if echoOutput:
+            print(text, end="")
+        logFile.write(text)
+        logFile.flush()
+        if outputHandler is not None:
+            outputHandler(text)
+
+    def _teePtyOutput(
+        self,
+        masterFd: int,
+        process: subprocess.Popen[bytes],
+        logFile: TextIO,
+        outputHandler: OutputHandler | None = None,
+        echoOutput: bool = True,
+    ) -> None:
+        """Read PTY output and tee complete lines.
+
+        Args:
+            masterFd: PTY master file descriptor.
+            process: Running subprocess.
+            logFile: Writable log file stream.
+            outputHandler: Optional callback for each output line.
+            echoOutput: Whether to echo merged output to stdout.
+        """
+
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        outputBuffer = ""
+        while True:
+            if process.poll() is not None:
+                ready, _, _ = select.select([masterFd], [], [], 0)
+                if not ready:
+                    break
+            else:
+                ready, _, _ = select.select([masterFd], [], [], 0.1)
+                if not ready:
+                    continue
+
+            try:
+                raw = os.read(masterFd, 4096)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+            if not raw:
+                break
+
+            outputBuffer += self._cleanPtyText(decoder.decode(raw))
+            while "\n" in outputBuffer:
+                line, outputBuffer = outputBuffer.split("\n", 1)
+                self._emitOutput(
+                    f"{line}\n",
+                    logFile,
+                    outputHandler,
+                    echoOutput,
+                )
+
+        outputBuffer += self._cleanPtyText(decoder.decode(b"", final=True))
+        if outputBuffer:
+            self._emitOutput(outputBuffer, logFile, outputHandler, echoOutput)
 
     @staticmethod
     def _teeOutput(

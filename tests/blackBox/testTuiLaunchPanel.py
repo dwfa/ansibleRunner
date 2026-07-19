@@ -17,7 +17,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rich.text import Span, Text
@@ -31,6 +33,7 @@ from ansibleRunner.tui.app import AnsibleRunnerTui
 from ansibleRunner.tui.configure.screen import ConfigureScreen
 from ansibleRunner.tui.launch.screen import LaunchScreen
 from ansibleRunner.tui.playbooks.screen import PlaybookMenuScreen
+from ansibleRunner.tui.run.screen import RunScreen
 
 
 def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
@@ -105,6 +108,34 @@ async def testTuiLaunchPanelShowsSavedConfig(tmp_path: Path) -> None:
         assert table.row_count == 1
         assert table.get_cell_at((0, 0)) == "Args"
         assert table.get_cell_at((0, 1)) == "-d -n dns --output-level task"
+
+
+@pytest.mark.asyncio
+async def testTuiLaunchPanelEnterRunsWhenTableHasFocus(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Enter starts a run even when the launch table has focus."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web", listTasks=True)},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        table = pilot.app.query_one("#launch-table", DataTable)
+        table.focus()
+
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+
+        assert runScreen.entry.name == "site-pb"
 
 
 @pytest.mark.asyncio
@@ -242,3 +273,21 @@ async def testTuiLaunchPanelEditOnceStylesOnlyTemporaryGroups(
         assert isinstance(launchArgs, Text)
         assert launchArgs.plain == "-n preinstaller --output-level task"
         assert launchArgs.spans == [Span(16, 35, "bold cyan")]
+
+
+def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook executable into a temporary PATH."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/bin/sh\n"
+        "echo 'PLAY [Test play] ********'\n"
+        "echo 'TASK [setup : Prepare host] ********'\n"
+        "echo 'ok: [localhost]'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")

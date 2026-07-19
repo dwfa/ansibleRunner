@@ -80,6 +80,30 @@ def testParserSuppressesSkippedTasks() -> None:
     ]
 
 
+def testParserSuppressesIncludedTasks() -> None:
+    """Verify include_tasks wrapper rows are omitted from visible task rows."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("TASK [manageImage : Load setup tasks] *****", now=2.0)
+    parser.processLine(
+        "included: /tmp/tasks/setup.yaml for localhost",
+        now=2.5,
+    )
+    parser.processLine("TASK [manageImage : Configure service] *****", now=3.0)
+    parser.processLine("ok: [localhost]", now=4.0)
+    parser.finalizePlay(now=5.0)
+
+    rows = parser.rows(now=6.0)
+
+    assert [(row.icon, row.name) for row in rows] == [
+        ("🎭", "Build image"),
+        ("⚙", "manageImage"),
+        ("🔧", "Configure service"),
+    ]
+
+
 def testParserMarksFailures() -> None:
     """Verify fatal output marks active play, role, and task failed."""
 
@@ -141,3 +165,24 @@ def testParserMarksAbort() -> None:
     rows = parser.rows(now=4.0)
 
     assert [row.status for row in rows] == ["aborted", "aborted", "aborted"]
+
+
+def testParserShowsPromptInteractionsUnderActiveRole() -> None:
+    """Verify prompt interactions render under the current role."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [Prompt play] ****************", now=1.0)
+    parser.processLine("TASK [pause : wait of input to continue] *****", now=2.0)
+    parser.recordInteraction("wait of input to continue", "continued", 0.5)
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.depth, row.icon, row.name, row.status) for row in rows] == [
+        (0, "🎭", "Prompt play", "succeeded"),
+        (1, "⚙", "pause", "succeeded"),
+        (2, "💬", "wait of input to continue — continued", "succeeded"),
+    ]
+    assert rows[2].duration == 0.5

@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from time import monotonic
 from typing import cast
 
 from rich.console import Group
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from textual import events
@@ -32,7 +34,9 @@ from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig, PlaybookEntry
 from ansibleRunner.playbooks.playbookConfig import buildRunnerArgv
 from ansibleRunner.progressParser import (
+    ANSI_PATTERN,
     AnsibleProgressParser,
+    INCLUDED_PATTERN,
     OutputLevel,
     ProgressRow,
 )
@@ -43,6 +47,7 @@ BackHandler = Callable[[], Awaitable[None]]
 RunnerFactory = Callable[[RuntimeDefaults], AnsibleCommandRunner]
 
 
+TASK_HEADER_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
     "aborted": "■",
@@ -72,11 +77,11 @@ class RunScreen(Container):
 
     BINDINGS = [
         Binding("enter", "send_enter", "Enter", priority=True),
+        Binding("space", "send_enter", "Space", priority=True),
         Binding("c", "cancel", "Cancel", priority=True),
-        Binding("ctrl+c", "cancel", "Cancel", priority=True),
+        Binding("ctrl+c", "interrupt_process", "Interrupt", priority=True),
         Binding("ctrl+z", "suspend_process", "Suspend", priority=True),
         Binding("escape", "back", "Back", priority=True),
-        Binding("q", "back", "Back", priority=True),
     ]
     can_focus = True
 
@@ -104,6 +109,11 @@ class RunScreen(Container):
         self.result: RunnerResult | None = None
         self.runControl = RunControl()
         self.runnerFactory = runnerFactory or self._defaultRunnerFactory
+        self.activePromptFromInclude = False
+        self.activePromptMessage: str | None = None
+        self.activePromptStart: float = 0.0
+        self.pendingPromptMessage: str | None = None
+        self.suppressNextPromptTask = False
         self.running = False
         self.spinnerIndex = 0
         self.outputLines: list[str] = []
@@ -126,7 +136,7 @@ class RunScreen(Container):
             yield Static("Starting ...", id="run-status")
             yield Static(Text("Waiting for Ansible progress ...", style="dim"), id="run-progress")
             yield Static(
-                "Enter input  c cancel  Ctrl-C exit  Ctrl-Z suspend  q/Esc cancel",
+                "Enter/Space continue  c/Esc cancel  Ctrl-C exit  Ctrl-Z suspend",
                 id="run-help",
             )
 
@@ -139,12 +149,10 @@ class RunScreen(Container):
         self.run_worker(self._runPlaybook, thread=True)
 
     async def action_back(self) -> None:
-        """Return to the launch screen."""
+        """Cancel the active run when a back key is pressed."""
 
         if self.running:
             self.action_cancel()
-            return
-        await self.onBack()
 
     async def on_key(self, event: events.Key) -> None:
         """Handle run-screen keys even when a child widget has focus.
@@ -157,10 +165,10 @@ class RunScreen(Container):
             event.stop()
             event.prevent_default()
             self.action_interrupt_process()
-        elif event.key == "enter":
+        elif event.key in {"enter", "space"}:
             event.stop()
             event.prevent_default()
-            self.action_send_enter()
+            await self.action_send_enter()
         elif event.key == "c":
             event.stop()
             event.prevent_default()
@@ -169,7 +177,7 @@ class RunScreen(Container):
             event.stop()
             event.prevent_default()
             self.action_suspend_process()
-        elif event.key in {"escape", "q"}:
+        elif event.key == "escape":
             event.stop()
             event.prevent_default()
             await self.action_back()
@@ -179,6 +187,8 @@ class RunScreen(Container):
 
         if not self.running:
             return
+        if self.activePromptMessage is not None:
+            self._recordPromptInteraction("aborted", aborted=True)
         self.query_one("#run-status", Static).update("Canceling ...")
         self._appendOutput("Cancel requested.")
         self.runControl.cancel()
@@ -192,11 +202,16 @@ class RunScreen(Container):
             self.runControl.cancel()
         self.app.exit(return_code=130)
 
-    def action_send_enter(self) -> None:
-        """Send an Enter keypress to the running playbook."""
+    async def action_send_enter(self) -> None:
+        """Send input to the active playbook or return after completion."""
 
         if self.running:
+            if self.activePromptMessage is not None:
+                self._recordPromptInteraction("continued")
             self.runControl.sendInput("\n")
+            self._refreshProgress()
+            return
+        await self.onBack()
 
     def action_suspend_process(self) -> None:
         """Suspend the TUI process using Textual's app-level handler."""
@@ -248,7 +263,7 @@ class RunScreen(Container):
         self._finalizeProgress(result)
         status = self.query_one("#run-status", Static)
         helpText = self.query_one("#run-help", Static)
-        helpText.update("q/Esc back")
+        helpText.update("Enter/Space back")
         if result.returnCode == 0:
             status.update("Finished: success")
         elif result.returnCode == 130:
@@ -270,8 +285,16 @@ class RunScreen(Container):
 
         now = monotonic()
         if result.returnCode == 130:
+            if self.activePromptMessage is not None:
+                self._recordPromptInteraction("aborted", aborted=True)
+            self.pendingPromptMessage = None
+            self.suppressNextPromptTask = False
             self.progressParser.markAborted(now)
         else:
+            if self.activePromptMessage is not None:
+                self._recordPromptInteraction("continued")
+            self.pendingPromptMessage = None
+            self.suppressNextPromptTask = False
             self.progressParser.finalizePlay(now)
         self.progressRows = self.progressParser.rows(now)
 
@@ -295,8 +318,54 @@ class RunScreen(Container):
         """
 
         now = monotonic()
-        self.progressParser.processLine(line.rstrip("\n"), now)
+        cleanLine = ANSI_PATTERN.sub("", line.rstrip("\n"))
+        self.progressParser.processLine(cleanLine, now)
+        self._detectPrompt(cleanLine, now)
         self.progressRows = self.progressParser.rows(now)
+
+    def _detectPrompt(self, line: str, now: float) -> None:
+        """Detect Ansible pause/wait prompt tasks.
+
+        Args:
+            line: Cleaned runner output line.
+            now: Timestamp for the prompt start.
+        """
+
+        if INCLUDED_PATTERN.match(line) and self.pendingPromptMessage is not None:
+            self.activePromptMessage = self.pendingPromptMessage
+            self.activePromptStart = now
+            self.activePromptFromInclude = True
+            self.pendingPromptMessage = None
+            return
+
+        taskMatch = TASK_HEADER_PATTERN.match(line)
+        if not taskMatch:
+            return
+
+        taskHeader = taskMatch.group(1)
+        taskParts = taskHeader.split(" : ", 1)
+        roleName = taskParts[0].lower() if len(taskParts) == 2 else ""
+        taskName = taskParts[-1]
+        normalizedTask = taskName.lower()
+        isPauseRole = roleName == "pause"
+        isPromptInclude = "wait of input" in normalizedTask
+        isPromptTask = "wait for user input" in normalizedTask
+        if isPauseRole and isPromptInclude and not isPromptTask:
+            self.pendingPromptMessage = taskName
+            return
+        if isPromptTask and self.activePromptMessage is not None:
+            return
+        if isPromptTask and self.suppressNextPromptTask:
+            self.suppressNextPromptTask = False
+            return
+        if not isPauseRole and not isPromptTask:
+            self.pendingPromptMessage = None
+            return
+
+        self.activePromptMessage = self.pendingPromptMessage or taskName
+        self.activePromptStart = now
+        self.activePromptFromInclude = False
+        self.pendingPromptMessage = None
 
     def _refreshProgress(self) -> None:
         """Render parsed progress rows."""
@@ -329,7 +398,51 @@ class RunScreen(Container):
                 Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
                 Text(self._formatDuration(row.duration), style="dim"),
             )
+        if self.activePromptMessage is not None:
+            return Group(table, self._renderPromptCard())
         return table
+
+    def _recordPromptInteraction(self, value: str, aborted: bool = False) -> None:
+        """Record and clear the active prompt interaction.
+
+        Args:
+            value: Interaction result text.
+            aborted: Whether the interaction aborted the run.
+        """
+
+        if self.activePromptMessage is None:
+            return
+        duration = monotonic() - self.activePromptStart
+        self.progressParser.recordInteraction(
+            self.activePromptMessage,
+            value,
+            duration,
+            aborted=aborted,
+        )
+        if self.activePromptFromInclude:
+            self.suppressNextPromptTask = True
+        self.activePromptFromInclude = False
+        self.activePromptMessage = None
+        self.activePromptStart = 0.0
+        self.progressRows = self.progressParser.rows(monotonic())
+
+    def _renderPromptCard(self) -> Panel:
+        """Render the active prompt card.
+
+        Returns:
+            Rich prompt card renderable.
+        """
+
+        message = self.activePromptMessage or "Waiting for input"
+        cardText = Text()
+        cardText.append(f"{message}\n")
+        cardText.append("Enter/Space continue   c/Esc cancel", style="bright_black")
+        return Panel(
+            cardText,
+            border_style="green",
+            title="💬 Input",
+            title_align="center",
+        )
 
     @staticmethod
     def _rowLabel(row: ProgressRow) -> str:

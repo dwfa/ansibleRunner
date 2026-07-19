@@ -156,6 +156,8 @@ def testRunPlaybookCanReceiveInput(tmp_path: Path, monkeypatch: Any) -> None:
         timer.cancel()
 
     assert result.returnCode == 0
+    assert any("stdin_isatty=True" in line for line in outputLines)
+    assert any("stdin_ioctl=True" in line for line in outputLines)
     assert any("waiting for input" in line for line in outputLines)
     assert any("continued" in line for line in outputLines)
 
@@ -215,8 +217,12 @@ def _writeInputFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
         "#!/usr/bin/env python3\n"
         + dedent(
             """
+            import termios
             import sys
 
+            print(f"stdin_isatty={sys.stdin.isatty()}", flush=True)
+            termios.tcgetattr(sys.stdin.fileno())
+            print("stdin_ioctl=True", flush=True)
             print("waiting for input", flush=True)
             sys.stdin.readline()
             print("continued", flush=True)

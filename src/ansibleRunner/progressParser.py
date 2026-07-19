@@ -29,9 +29,11 @@ PLAY_PATTERN = re.compile(r"^PLAY \[(.+?)\] \*+\s*$")
 TASK_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 HANDLER_PATTERN = re.compile(r"^RUNNING HANDLER \[(.+?)\] \*+\s*$")
 FATAL_PATTERN = re.compile(r"^fatal: \[.+?\]:")
+INCLUDED_PATTERN = re.compile(r"^included: .+ for .+$")
 RESULT_PATTERN = re.compile(
     r"^(ok|changed|failed|fatal|unreachable|skipping): \[.+?\]"
 )
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @dataclass
@@ -44,6 +46,7 @@ class ProgressItem:
         aborted: Whether this item was aborted.
         duration: Completed duration in seconds.
         failed: Whether this item failed.
+        result: Optional interaction result text.
         interactions: Prompt interactions under this item.
         roles: Child role items.
         sawExecutedResult: Whether a task had a non-skipped result.
@@ -56,6 +59,7 @@ class ProgressItem:
     aborted: bool = False
     duration: float = 0.0
     failed: bool = False
+    result: str = ""
     interactions: list["ProgressItem"] = field(default_factory=list)
     roles: list["ProgressItem"] = field(default_factory=list)
     sawExecutedResult: bool = False
@@ -106,22 +110,28 @@ class AnsibleProgressParser:
             now: Timestamp for this parser event.
         """
 
-        playMatch = PLAY_PATTERN.match(line)
+        cleanLine = ANSI_PATTERN.sub("", line)
+
+        playMatch = PLAY_PATTERN.match(cleanLine)
         if playMatch:
             self.finalizePlay(now)
             self.currentPlay = ProgressItem(playMatch.group(1), now)
             return
 
-        taskMatch = TASK_PATTERN.match(line) or HANDLER_PATTERN.match(line)
+        taskMatch = TASK_PATTERN.match(cleanLine) or HANDLER_PATTERN.match(cleanLine)
         if taskMatch:
             self._startTask(taskMatch.group(1), now)
             return
 
-        if FATAL_PATTERN.match(line):
+        if INCLUDED_PATTERN.match(cleanLine):
+            self._suppressCurrentTask(now)
+            return
+
+        if FATAL_PATTERN.match(cleanLine):
             self._markFailure()
             return
 
-        resultMatch = RESULT_PATTERN.match(line)
+        resultMatch = RESULT_PATTERN.match(cleanLine)
         if resultMatch and self.currentTask is not None:
             resultState = resultMatch.group(1)
             self.currentTask.sawResult = True
@@ -194,16 +204,22 @@ class AnsibleProgressParser:
         if self.outputLevel == "task":
             for task in play.tasks:
                 rows.append(self._row(1, "🔧", task, now, False))
+        for interaction in play.interactions:
+            rows.append(self._row(1, "💬", interaction, now, False))
         for role in play.roles:
             rows.append(self._row(1, "⚙", role, now, False))
             if self.outputLevel == "task":
                 for task in role.tasks:
                     rows.append(self._row(2, "🔧", task, now, False))
+            for interaction in role.interactions:
+                rows.append(self._row(2, "💬", interaction, now, False))
         if isActive and self.currentRole is not None:
             rows.append(self._row(1, "⚙", self.currentRole, now, True))
             if self.outputLevel == "task":
                 for task in self.currentRole.tasks:
                     rows.append(self._row(2, "🔧", task, now, False))
+            for interaction in self.currentRole.interactions:
+                rows.append(self._row(2, "💬", interaction, now, False))
             if self.currentTask is not None and self._taskIsVisible(self.currentTask):
                 rows.append(self._row(2, "🔧", self.currentTask, now, True))
         elif isActive and self.currentTask is not None:
@@ -244,6 +260,49 @@ class AnsibleProgressParser:
             self.currentRole.failed = True
         if self.currentTask is not None:
             self.currentTask.failed = True
+
+    def _suppressCurrentTask(self, now: float) -> None:
+        """Finalize the active task as structural output.
+
+        Args:
+            now: Timestamp for the structural include output.
+        """
+
+        if self.currentTask is None:
+            return
+        self.currentTask.sawResult = True
+        self.currentTask.sawExecutedResult = False
+        self._finalizeTask(now)
+
+    def recordInteraction(
+        self,
+        message: str,
+        value: str,
+        duration: float,
+        aborted: bool = False,
+    ) -> None:
+        """Record a completed prompt interaction.
+
+        Args:
+            message: Prompt message shown to the user.
+            value: User-facing response result.
+            duration: Time spent handling the prompt.
+            aborted: Whether the interaction aborted the run.
+        """
+
+        if self.currentPlay is None:
+            return
+        interaction = ProgressItem(
+            name=f"{message} — {value}",
+            startTime=0.0,
+            aborted=aborted,
+            duration=duration,
+            result=value,
+        )
+        if self.currentRole is not None:
+            self.currentRole.interactions.append(interaction)
+            return
+        self.currentPlay.interactions.append(interaction)
 
     @staticmethod
     def _row(

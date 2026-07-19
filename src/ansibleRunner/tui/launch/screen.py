@@ -19,6 +19,7 @@ import shlex
 from collections.abc import Awaitable, Callable
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
@@ -39,6 +40,16 @@ EditOnceHandler = Callable[[PlaybookEntry, PlaybookConfig], Awaitable[None]]
 RunHandler = Callable[[PlaybookEntry, PlaybookConfig, str | Text], Awaitable[None]]
 
 
+class LaunchTable(DataTable[str]):
+    """Launch table that routes Enter to the launch screen."""
+
+    async def action_select_cursor(self) -> None:
+        """Start the run when Enter is pressed inside the table."""
+
+        screen = self.query_ancestor("#launch-menu", LaunchScreen)
+        await screen.action_run_placeholder()
+
+
 class LaunchScreen(Container):
     """Review a playbook before execution.
 
@@ -50,12 +61,12 @@ class LaunchScreen(Container):
     """
 
     BINDINGS = [
-        Binding("enter", "run_placeholder", "Run"),
-        Binding("r", "run_placeholder", "Run"),
-        Binding("e", "edit_once", "Edit once"),
-        Binding("c", "configure", "Configure"),
-        Binding("escape", "back", "Back"),
-        Binding("q", "back", "Back"),
+        Binding("enter", "run_placeholder", "Run", priority=True),
+        Binding("r", "run_placeholder", "Run", priority=True),
+        Binding("e", "edit_once", "Edit once", priority=True),
+        Binding("c", "configure", "Configure", priority=True),
+        Binding("escape", "back", "Back", priority=True),
+        Binding("q", "back", "Back", priority=True),
     ]
     can_focus = True
 
@@ -105,7 +116,7 @@ class LaunchScreen(Container):
                 yield Static("▶ Launch", id="launch-prefix")
                 yield Static(self._playbookNameText(), id="launch-title")
                 yield Static(self.entry.title, id="launch-description")
-            yield DataTable(id="launch-table")
+            yield LaunchTable(id="launch-table")
             yield Static(
                 "Enter/r run  e edit once  c configure  q/Esc back",
                 id="launch-help",
@@ -114,7 +125,7 @@ class LaunchScreen(Container):
     def on_mount(self) -> None:
         """Populate launch review details."""
 
-        table = self.query_one("#launch-table", DataTable)
+        table = self.query_one("#launch-table", LaunchTable)
         table.cursor_type = "none"
         table.show_header = False
         table.zebra_stripes = True
@@ -126,6 +137,30 @@ class LaunchScreen(Container):
         """Return to the playbook menu."""
 
         await self.onBack()
+
+    async def on_key(self, event: events.Key) -> None:
+        """Handle launch keys even when a child widget has focus.
+
+        Args:
+            event: Key event emitted by Textual.
+        """
+
+        if event.key in {"enter", "r"}:
+            event.stop()
+            event.prevent_default()
+            await self.action_run_placeholder()
+        elif event.key == "e":
+            event.stop()
+            event.prevent_default()
+            await self.action_edit_once()
+        elif event.key == "c":
+            event.stop()
+            event.prevent_default()
+            await self.action_configure()
+        elif event.key in {"escape", "q"}:
+            event.stop()
+            event.prevent_default()
+            await self.action_back()
 
     async def action_configure(self) -> None:
         """Open saved configuration for this playbook."""
@@ -141,6 +176,16 @@ class LaunchScreen(Container):
         """Start playbook execution."""
 
         await self.onRun(self.entry, self.config, self._runnerArgvDisplay())
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Start the run when the launch table row is selected.
+
+        Args:
+            event: Data table row selection event.
+        """
+
+        event.stop()
+        await self.action_run_placeholder()
 
     def _loadConfig(
         self,

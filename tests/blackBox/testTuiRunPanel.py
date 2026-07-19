@@ -91,9 +91,11 @@ async def testTuiRunPanelRunsSelectedPlaybook(
         runStatus = pilot.app.query_one("#run-status", Static)
         runTitle = pilot.app.query_one("#run-title", Static)
         runProgress = pilot.app.query_one("#run-progress", Static)
+        runHelp = pilot.app.query_one("#run-help", Static)
 
         assert str(runTitle.content) == "site web"
         assert str(runStatus.content) == "Finished: success"
+        assert str(runHelp.content) == "Enter/Space back"
         renderedProgress = _renderRich(runProgress.content)
 
         assert "🎭 Test play" in renderedProgress
@@ -115,6 +117,39 @@ async def testTuiRunPanelRunsSelectedPlaybook(
             ("🎭", "Test play", "succeeded"),
             ("⚙", "setup", "succeeded"),
         ]
+
+        await pilot.press("enter")
+
+        assert pilot.app.query_one("#launch-menu", LaunchScreen)
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelSpaceReturnsAfterCompletedRun(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Space returns to launch after a completed run."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        assert str(pilot.app.query_one("#run-status", Static).content) == (
+            "Finished: success"
+        )
+
+        await pilot.press("space")
+
+        assert pilot.app.query_one("#launch-menu", LaunchScreen)
 
 
 @pytest.mark.asyncio
@@ -148,7 +183,7 @@ async def testTuiRunPanelCanCancelActiveRun(
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 130
 
-        await pilot.press("escape")
+        await pilot.press("enter")
 
         assert pilot.app.query_one("#launch-menu", LaunchScreen)
 
@@ -188,6 +223,79 @@ async def testTuiRunPanelEnterSendsInputToActiveRun(
 
 
 @pytest.mark.asyncio
+async def testTuiRunPanelShowsPromptCardAndRecordsInteraction(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Ansible pause tasks show a prompt and record interaction rows."""
+
+    _writeInputFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runProgress = pilot.app.query_one("#run-progress", Static)
+        renderedPrompt = _renderRich(runProgress.content)
+
+        assert "💬 Input" in renderedPrompt
+        assert "wait of input to continue" in renderedPrompt
+        assert runScreen.activePromptMessage == "wait of input to continue"
+
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        runStatus = pilot.app.query_one("#run-status", Static)
+        renderedProgress = _renderRich(runProgress.content)
+
+        assert str(runStatus.content) == "Finished: success"
+        assert "💬 wait of input to continue — continued" in renderedProgress
+        assert "💬 wait for user input — continued" not in renderedProgress
+        assert runScreen.activePromptMessage is None
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelClearsPromptCardWhenRunFinishes(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify successful completion clears any active prompt card."""
+
+    _writeCompletingPromptFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runProgress = pilot.app.query_one("#run-progress", Static)
+        renderedProgress = _renderRich(runProgress.content)
+
+        assert str(pilot.app.query_one("#run-status", Static).content) == (
+            "Finished: success"
+        )
+        assert "💬 Input" not in renderedProgress
+        assert "💬 wait of input to continue — continued" in renderedProgress
+        assert "💬 wait for user input — continued" not in renderedProgress
+        assert runScreen.activePromptMessage is None
+
+
+@pytest.mark.asyncio
 async def testTuiRunPanelEscapeCancelsActiveRunAndStaysInApp(
     tmp_path: Path,
     monkeypatch: Any,
@@ -220,11 +328,11 @@ async def testTuiRunPanelEscapeCancelsActiveRunAndStaysInApp(
 
 
 @pytest.mark.asyncio
-async def testTuiRunPanelQuitCancelsActiveRunAndStaysInApp(
+async def testTuiRunPanelQuitDoesNotCancelActiveRun(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify q cancels an active run without leaving the app."""
+    """Verify q does not cancel an active run."""
 
     _writeSlowFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
@@ -246,9 +354,12 @@ async def testTuiRunPanelQuitCancelsActiveRunAndStaysInApp(
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
 
-        assert str(runStatus.content) == "Finished: canceled"
-        assert runScreen.result is not None
-        assert runScreen.result.returnCode == 130
+        assert str(runStatus.content) != "Finished: canceled"
+        assert runScreen.running
+        assert runScreen.result is None
+
+        runScreen.action_cancel()
+        await pilot.pause(0.5)
 
 
 @pytest.mark.asyncio
@@ -280,7 +391,7 @@ async def testTuiRunPanelCtrlCExitsProcessCleanly(
         await pilot.pause(0.2)
 
         pilot.app.query_one("#run-menu", RunScreen).focus()
-        pilot.app.action_help_quit()
+        await pilot.press("ctrl+c")
         await pilot.pause(0.5)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
@@ -356,9 +467,41 @@ def _writeInputFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             """
             import sys
 
+            print("PLAY [Prompt play] ********", flush=True)
+            print("\\033[0;35mTASK [pause : wait of input to continue] ********\\033[0m", flush=True)
+            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
+            print("[pause : wait for user input]", flush=True)
             print("waiting for input", flush=True)
             sys.stdin.readline()
+            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
             print("continued", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeCompletingPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook that completes after a prompt task."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import sys
+
+            print("PLAY [Prompt play] ********", flush=True)
+            print("\\033[0;35mTASK [pause : wait of input to continue] ********\\033[0m", flush=True)
+            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
+            print("[pause : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
+            print("ok: [localhost]", flush=True)
             sys.exit(0)
             """
         ).lstrip(),

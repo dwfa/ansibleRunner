@@ -169,6 +169,39 @@ async def testTuiConfigurePanelEditKeepsExistingNodeVisible(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def testTuiConfigurePanelSupportsCursorEditingInTextFields(
+    tmp_path: Path,
+) -> None:
+    """Verify cursor keys edit inside node text instead of appending only."""
+
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("c")
+        configureMenu = pilot.app.query_one("#configure-menu", ConfigureScreen)
+        table = pilot.app.query_one("#configure-table", ConfigureTable)
+
+        await pilot.press("enter")
+        await pilot.press("d", "s")
+        await pilot.press("left")
+        await pilot.press("n")
+
+        assert configureMenu.nodeEditValue == "dns"
+        assert table.get_cell_at((0, 2)) == "dn█s"
+
+        await pilot.press("right", "backspace")
+
+        assert configureMenu.nodeEditValue == "dn"
+        assert table.get_cell_at((0, 2)) == "dn█"
+
+        await pilot.press("home", "p", "end", "enter")
+
+        assert configureMenu.nodeEditValue is None
+        assert table.get_cell_at((0, 2)) == "pdn"
+
+
+@pytest.mark.asyncio
 async def testTuiConfigurePanelArrowsDoNotEditNode(tmp_path: Path) -> None:
     """Verify left/right do not open or mutate node editing."""
 

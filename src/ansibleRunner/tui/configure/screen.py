@@ -56,7 +56,8 @@ class ConfigureTable(DataTable[str]):
 
         screen = self._configureScreen()
         return screen.textEditValue is not None and (
-            character is not None or key in {"backspace", "enter", "escape"}
+            character is not None
+            or key in {"backspace", "delete", "end", "enter", "escape", "home", "left", "right"}
         )
 
     def action_select_cursor(self) -> None:
@@ -86,9 +87,19 @@ class ConfigureTable(DataTable[str]):
         elif event.key == "escape":
             screen.cancelTextEdit()
         elif event.key == "backspace":
-            screen.updateTextEditValue(screen.textEditValue[:-1])
+            screen.backspaceTextEdit()
+        elif event.key == "delete":
+            screen.deleteTextEdit()
+        elif event.key == "home":
+            screen.moveTextEditCursor(0)
+        elif event.key == "end":
+            screen.moveTextEditCursor(len(screen.textEditValue))
+        elif event.key == "left":
+            screen.moveTextEditCursor(screen.textEditCursor - 1)
+        elif event.key == "right":
+            screen.moveTextEditCursor(screen.textEditCursor + 1)
         elif event.character:
-            screen.updateTextEditValue(screen.textEditValue + event.character)
+            screen.insertTextEdit(event.character)
 
     def _configureScreen(self) -> "ConfigureScreen":
         """Return the owning configure screen.
@@ -152,6 +163,7 @@ class ConfigureScreen(Container):
         self.onDone = onDone
         self.onSave = onSave
         self.saveKey = saveKey
+        self.textEditCursor = 0
         self.textEditField: ConfigField | None = None
         self.textEditValue: str | None = None
         self.workingConfig = initialConfig or self._loadConfig()
@@ -184,11 +196,17 @@ class ConfigureScreen(Container):
     def action_cycle_left(self) -> None:
         """Cycle the selected setting backward."""
 
+        if self.textEditValue is not None:
+            self.moveTextEditCursor(self.textEditCursor - 1)
+            return
         self._cycleSelectedField(-1)
 
     def action_cycle_right(self) -> None:
         """Cycle the selected setting forward."""
 
+        if self.textEditValue is not None:
+            self.moveTextEditCursor(self.textEditCursor + 1)
+            return
         self._cycleSelectedField(1)
 
     async def action_cancel(self) -> None:
@@ -222,6 +240,7 @@ class ConfigureScreen(Container):
         if field.kind in {"args", "string"}:
             self.textEditField = field
             self.textEditValue = self._editableText(field)
+            self.textEditCursor = len(self.textEditValue)
             self._refreshTable()
             return
         self._cycleSelectedField(1)
@@ -312,7 +331,11 @@ class ConfigureScreen(Container):
         value: Any = getattr(self.workingConfig, field.key)
         if field.kind in {"args", "string"}:
             if self.textEditField == field and self.textEditValue is not None:
-                return f"{self.textEditValue}█"
+                return (
+                    self.textEditValue[: self.textEditCursor]
+                    + "█"
+                    + self.textEditValue[self.textEditCursor :]
+                )
             if field.kind == "args":
                 return shlex.join(value) if value else ""
             return str(value) if value else ""
@@ -365,6 +388,7 @@ class ConfigureScreen(Container):
 
         self.textEditField = None
         self.textEditValue = None
+        self.textEditCursor = 0
         self._refreshTable()
 
     def cancelTextEdit(self) -> None:
@@ -374,6 +398,59 @@ class ConfigureScreen(Container):
             return
         self.textEditField = None
         self.textEditValue = None
+        self.textEditCursor = 0
+        self._refreshTable()
+
+    def backspaceTextEdit(self) -> None:
+        """Delete the character before the active text cursor."""
+
+        if self.textEditValue is None or self.textEditCursor <= 0:
+            return
+        self.textEditValue = (
+            self.textEditValue[: self.textEditCursor - 1]
+            + self.textEditValue[self.textEditCursor :]
+        )
+        self.textEditCursor -= 1
+        self._refreshTable()
+
+    def deleteTextEdit(self) -> None:
+        """Delete the character after the active text cursor."""
+
+        if self.textEditValue is None or self.textEditCursor >= len(self.textEditValue):
+            return
+        self.textEditValue = (
+            self.textEditValue[: self.textEditCursor]
+            + self.textEditValue[self.textEditCursor + 1 :]
+        )
+        self._refreshTable()
+
+    def insertTextEdit(self, value: str) -> None:
+        """Insert text at the active text cursor.
+
+        Args:
+            value: Text to insert.
+        """
+
+        if self.textEditValue is None:
+            return
+        self.textEditValue = (
+            self.textEditValue[: self.textEditCursor]
+            + value
+            + self.textEditValue[self.textEditCursor :]
+        )
+        self.textEditCursor += len(value)
+        self._refreshTable()
+
+    def moveTextEditCursor(self, position: int) -> None:
+        """Move the active text cursor.
+
+        Args:
+            position: Requested cursor offset.
+        """
+
+        if self.textEditValue is None:
+            return
+        self.textEditCursor = max(0, min(position, len(self.textEditValue)))
         self._refreshTable()
 
     def updateTextEditValue(self, value: str) -> None:
@@ -386,6 +463,7 @@ class ConfigureScreen(Container):
         if self.textEditValue is None:
             return
         self.textEditValue = value
+        self.textEditCursor = len(value)
         self._refreshTable()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -421,9 +499,19 @@ class ConfigureScreen(Container):
         elif event.key == "escape":
             self.cancelTextEdit()
         elif event.key == "backspace":
-            self.updateTextEditValue(self.textEditValue[:-1])
+            self.backspaceTextEdit()
+        elif event.key == "delete":
+            self.deleteTextEdit()
+        elif event.key == "home":
+            self.moveTextEditCursor(0)
+        elif event.key == "end":
+            self.moveTextEditCursor(len(self.textEditValue))
+        elif event.key == "left":
+            self.moveTextEditCursor(self.textEditCursor - 1)
+        elif event.key == "right":
+            self.moveTextEditCursor(self.textEditCursor + 1)
         elif event.character:
-            self.updateTextEditValue(self.textEditValue + event.character)
+            self.insertTextEdit(event.character)
 
     def _loadConfig(self) -> PlaybookConfig:
         """Load the saved config for the selected playbook.
