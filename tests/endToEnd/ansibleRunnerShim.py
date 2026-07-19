@@ -78,11 +78,11 @@ def getLogPath(projectRoot: Path) -> Path:
         projectRoot: Ansible project root.
 
     Returns:
-        Log path under ``.ansibleRunner/logs``.
+        Log path under ``logs``.
     """
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return projectRoot / ".ansibleRunner" / "logs" / f"shim-{timestamp}.log"
+    return projectRoot / "logs" / f"shim-{timestamp}.log"
 
 
 def installPackage(pythonBin: Path, logPath: Path) -> None:

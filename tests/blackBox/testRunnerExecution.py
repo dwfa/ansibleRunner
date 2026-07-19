@@ -160,6 +160,30 @@ def testRunPlaybookCanReceiveInput(tmp_path: Path, monkeypatch: Any) -> None:
     assert any("continued" in line for line in outputLines)
 
 
+def testRunPlaybookPrunesOldRunLogs(tmp_path: Path, monkeypatch: Any) -> None:
+    """Verify playbook run logs keep only the newest five files."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    playbook = tmp_path / "playbooks" / "site.yaml"
+    playbook.parent.mkdir()
+    playbook.write_text("---\n", encoding="utf-8")
+    logDir = tmp_path / "logs"
+    logDir.mkdir()
+    for index in range(7):
+        logPath = logDir / f"site-20260719-12000{index}.log"
+        logPath.write_text(f"old {index}\n", encoding="utf-8")
+        os.utime(logPath, (index, index))
+    unrelatedLog = logDir / "shim-20260719-120000.log"
+    unrelatedLog.write_text("shim\n", encoding="utf-8")
+
+    runner = AnsibleCommandRunner(tmp_path, logDir)
+    result = runner.runPlaybook("playbooks/site.yaml", "web", echoOutput=False)
+
+    assert result.returnCode == 0
+    assert len(sorted(logDir.glob("site-*.log"))) == 5
+    assert unrelatedLog.is_file()
+
+
 def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
     """Write a fake ansible-playbook executable into a temporary PATH."""
 

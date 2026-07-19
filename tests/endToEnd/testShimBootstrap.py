@@ -74,7 +74,7 @@ def testGetLogPathUsesProjectLogs(tmp_path: Path) -> None:
 
     logPath = shim.getLogPath(tmp_path)
 
-    assert logPath.parent == tmp_path / ".ansibleRunner" / "logs"
+    assert logPath.parent == tmp_path / "logs"
     assert logPath.name.startswith("shim-")
     assert logPath.suffix == ".log"
 

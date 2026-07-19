@@ -39,4 +39,4 @@ def testLogDirFallsBackToProjectDefault(tmp_path: Path, monkeypatch: Any) -> Non
 
     monkeypatch.delenv("LOG_DIR", raising=False)
     runner = AnsibleCommandRunner(tmp_path)
-    assert runner.logDir == tmp_path.resolve() / ".ansibleRunner" / "logs"
+    assert runner.logDir == tmp_path.resolve() / "logs"

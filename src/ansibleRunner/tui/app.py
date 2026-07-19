@@ -169,9 +169,11 @@ class AnsibleRunnerTui(App[int]):
         margin-bottom: 1;
     }
 
-    #run-log {
+    #run-progress {
+        background: $surface;
         height: 1fr;
         min-height: 10;
+        padding: 1 1;
     }
 
     #playbook-help,

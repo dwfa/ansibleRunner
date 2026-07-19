@@ -50,6 +50,6 @@ class RuntimeDefaults:
         root = Path(projectRoot).expanduser().resolve()
         return cls(
             projectRoot=root,
-            logDir=root / ".ansibleRunner" / "logs",
+            logDir=root / "logs",
             stateDir=root / ".ansibleRunner" / "state",
         )

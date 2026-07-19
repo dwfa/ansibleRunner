@@ -422,6 +422,7 @@ class AnsibleCommandRunner:
             echoOutput,
             runControl,
         )
+        self._pruneRunLogs(playbookPath, logPath)
         return RunnerResult(
             command=command,
             returnCode=returnCode,
@@ -458,6 +459,34 @@ class AnsibleCommandRunner:
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return self.logDir / f"{playbookPath.stem}-{timestamp}.log"
+
+    def _pruneRunLogs(
+        self,
+        playbookPath: Path,
+        activeLogPath: Path,
+        keepCount: int = 5,
+    ) -> None:
+        """Keep only the newest run logs for a playbook.
+
+        Args:
+            playbookPath: Playbook whose run logs should be pruned.
+            activeLogPath: Current run log path, which must be retained.
+            keepCount: Number of newest run logs to keep.
+        """
+
+        logs = sorted(
+            self.logDir.glob(f"{playbookPath.stem}-*.log"),
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+        activeResolved = activeLogPath.resolve()
+        for logPath in logs[keepCount:]:
+            if logPath.resolve() == activeResolved:
+                continue
+            try:
+                logPath.unlink()
+            except FileNotFoundError:
+                continue
 
     @staticmethod
     def _coercePlaybookRun(

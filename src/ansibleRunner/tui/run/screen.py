@@ -16,22 +16,46 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from time import monotonic
+from typing import cast
 
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
-from textual.widgets import RichLog, Static
+from textual.widgets import Static
 
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig, PlaybookEntry
 from ansibleRunner.playbooks.playbookConfig import buildRunnerArgv
+from ansibleRunner.progressParser import (
+    AnsibleProgressParser,
+    OutputLevel,
+    ProgressRow,
+)
 from ansibleRunner.runner import AnsibleCommandRunner, RunControl, RunnerResult
 
 
 BackHandler = Callable[[], Awaitable[None]]
 RunnerFactory = Callable[[RuntimeDefaults], AnsibleCommandRunner]
+
+
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+STATUS_ICONS = {
+    "aborted": "■",
+    "failed": "✗",
+    "running": "",
+    "succeeded": "✓",
+}
+STATUS_STYLES = {
+    "aborted": "yellow",
+    "failed": "red",
+    "running": "cyan",
+    "succeeded": "green",
+}
 
 
 class RunScreen(Container):
@@ -73,10 +97,16 @@ class RunScreen(Container):
         self.defaults = defaults
         self.entry = entry
         self.onBack = onBack
+        self.progressParser = AnsibleProgressParser(
+            cast(OutputLevel, self.config.outputLevel)
+        )
+        self.progressRows: list[ProgressRow] = []
         self.result: RunnerResult | None = None
         self.runControl = RunControl()
         self.runnerFactory = runnerFactory or self._defaultRunnerFactory
         self.running = False
+        self.spinnerIndex = 0
+        self.outputLines: list[str] = []
 
     def compose(self) -> ComposeResult:
         """Compose the run panel.
@@ -94,7 +124,7 @@ class RunScreen(Container):
                 yield Static("Args", id="run-args-label")
                 yield Static(self.argsDisplay, id="run-args-value")
             yield Static("Starting ...", id="run-status")
-            yield RichLog(id="run-log", wrap=True, highlight=False, markup=False)
+            yield Static(Text("Waiting for Ansible progress ...", style="dim"), id="run-progress")
             yield Static(
                 "Enter input  c cancel  Ctrl-C exit  Ctrl-Z suspend  q/Esc cancel",
                 id="run-help",
@@ -105,6 +135,7 @@ class RunScreen(Container):
 
         self.focus()
         self.running = True
+        self.set_interval(1.0, self._refreshProgress)
         self.run_worker(self._runPlaybook, thread=True)
 
     async def action_back(self) -> None:
@@ -182,14 +213,15 @@ class RunScreen(Container):
         self.app.call_from_thread(self._appendOutput, line)
 
     def _appendOutput(self, line: str) -> None:
-        """Append runner output to the screen.
+        """Record runner output and refresh parsed progress.
 
         Args:
             line: Output line from the runner.
         """
 
-        log = self.query_one("#run-log", RichLog)
-        log.write(line.rstrip("\n"), scroll_end=True)
+        self.outputLines.append(line)
+        self._processProgressLine(line)
+        self._refreshProgress()
 
     @staticmethod
     def _defaultRunnerFactory(defaults: RuntimeDefaults) -> AnsibleCommandRunner:
@@ -213,6 +245,7 @@ class RunScreen(Container):
 
         self.result = result
         self.running = False
+        self._finalizeProgress(result)
         status = self.query_one("#run-status", Static)
         helpText = self.query_one("#run-help", Static)
         helpText.update("q/Esc back")
@@ -225,7 +258,22 @@ class RunScreen(Container):
         if result.stderr:
             self._appendOutput(result.stderr)
         if result.logPath:
-            self._appendOutput(f"Log: {result.logPath}")
+            self.outputLines.append(f"Log: {result.logPath}")
+            self._refreshProgress()
+
+    def _finalizeProgress(self, result: RunnerResult) -> None:
+        """Finalize parsed progress rows for a completed run.
+
+        Args:
+            result: Completed runner result.
+        """
+
+        now = monotonic()
+        if result.returnCode == 130:
+            self.progressParser.markAborted(now)
+        else:
+            self.progressParser.finalizePlay(now)
+        self.progressRows = self.progressParser.rows(now)
 
     def _playbookNameText(self) -> str:
         """Build run title text.
@@ -238,6 +286,100 @@ class RunScreen(Container):
         if self.config.node:
             titleParts.append(self.config.node)
         return " ".join(titleParts)
+
+    def _processProgressLine(self, line: str) -> None:
+        """Update parsed progress state from one output line.
+
+        Args:
+            line: Runner output line.
+        """
+
+        now = monotonic()
+        self.progressParser.processLine(line.rstrip("\n"), now)
+        self.progressRows = self.progressParser.rows(now)
+
+    def _refreshProgress(self) -> None:
+        """Render parsed progress rows."""
+
+        if self.running:
+            self.progressRows = self.progressParser.rows(monotonic())
+
+        progress = self.query_one("#run-progress", Static)
+        progress.update(self._renderProgress())
+
+    def _renderProgress(self) -> Group | Table | Text:
+        """Build rich progress renderable for the run panel.
+
+        Returns:
+            Rich renderable representing parsed progress rows.
+        """
+
+        if not self.progressRows:
+            if self.running:
+                return Text("Waiting for Ansible progress ...", style="dim")
+            return Text("No parsed Ansible progress was detected.", style="dim")
+
+        table = Table.grid(expand=True, padding=(0, 2))
+        table.add_column(no_wrap=True, overflow="ellipsis", ratio=1)
+        table.add_column(justify="right", no_wrap=True, width=1)
+        table.add_column(justify="right", no_wrap=True, width=8)
+        for row in self.progressRows:
+            table.add_row(
+                self._rowLabel(row),
+                Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
+                Text(self._formatDuration(row.duration), style="dim"),
+            )
+        return table
+
+    @staticmethod
+    def _rowLabel(row: ProgressRow) -> str:
+        """Build the left-hand progress tree label.
+
+        Args:
+            row: Parsed progress row.
+
+        Returns:
+            Tree label with an icon and display name.
+        """
+
+        if row.depth == 0:
+            return f"{row.icon} {row.name}"
+        if row.depth == 1:
+            return f"   └─ {row.icon} {row.name}"
+        return f"      └─ {row.icon} {row.name}"
+
+    def _statusIcon(self, status: str) -> str:
+        """Return the status icon for a progress row.
+
+        Args:
+            status: Progress row status.
+
+        Returns:
+            Display icon for the status.
+        """
+
+        if status == "running":
+            icon = SPINNER_FRAMES[self.spinnerIndex % len(SPINNER_FRAMES)]
+            self.spinnerIndex += 1
+            return icon
+        return STATUS_ICONS[status]
+
+    @staticmethod
+    def _formatDuration(duration: float) -> str:
+        """Format a duration for compact TUI display.
+
+        Args:
+            duration: Duration in seconds.
+
+        Returns:
+            Duration as a compact string.
+        """
+
+        totalSeconds = max(0, int(duration))
+        minutes, seconds = divmod(totalSeconds, 60)
+        if minutes:
+            return f"[{minutes}m {seconds:02d}s]"
+        return f"[{duration:.1f}s]"
 
     def _runPlaybook(self) -> None:
         """Run the selected playbook through the command runner."""

@@ -42,7 +42,7 @@ def testRuntimeDefaultsAreProjectLocal(tmp_path: Path) -> None:
 
     defaults = RuntimeDefaults.forProject(tmp_path)
 
-    assert defaults.logDir == tmp_path.resolve() / ".ansibleRunner" / "logs"
+    assert defaults.logDir == tmp_path.resolve() / "logs"
     assert defaults.stateDir == tmp_path.resolve() / ".ansibleRunner" / "state"
 
 
@@ -54,3 +54,4 @@ def testRuntimeDefaultsDoesNotCreateDirectories(tmp_path: Path) -> None:
     assert not defaults.logDir.exists()
     assert not defaults.stateDir.exists()
     assert not (tmp_path / ".ansibleRunner").exists()
+    assert not (tmp_path / "logs").exists()
