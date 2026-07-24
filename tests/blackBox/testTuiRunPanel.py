@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
 import pytest
 from rich.console import Console
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from ansibleRunner.defaults import RuntimeDefaults
@@ -67,6 +69,22 @@ def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
     )
 
 
+async def waitForRunComplete(pilot: Any, cycles: int = 100) -> None:
+    """Wait for the run screen worker to finish.
+
+    Args:
+        pilot: Textual test pilot.
+        cycles: Number of 0.1 second polling cycles.
+    """
+
+    for _ in range(cycles):
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        if runScreen.result is not None:
+            return
+        await pilot.pause(0.1)
+    raise AssertionError("Run did not complete before test timeout.")
+
+
 @pytest.mark.asyncio
 async def testTuiRunPanelRunsSelectedPlaybook(
     tmp_path: Path,
@@ -85,24 +103,38 @@ async def testTuiRunPanelRunsSelectedPlaybook(
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause(0.5)
+        await waitForRunComplete(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
         runTitle = pilot.app.query_one("#run-title", Static)
+        runFailure = pilot.app.query_one("#run-failure", Static)
         runProgress = pilot.app.query_one("#run-progress", Static)
+        runProgressScroll = pilot.app.query_one("#run-progress-scroll", VerticalScroll)
         runHelp = pilot.app.query_one("#run-help", Static)
 
         assert str(runTitle.content) == "site web"
-        assert str(runStatus.content) == "Finished: success"
+        assert str(runStatus.content).startswith("Finished: success  elapsed=")
+        assert not runFailure.display
         assert str(runHelp.content) == "Enter/Space back"
+        assert runProgressScroll.id == "run-progress-scroll"
         renderedProgress = _renderRich(runProgress.content)
 
         assert "🎭 Test play" in renderedProgress
         assert "   └─ ⚙ setup" in renderedProgress
         progressLines = renderedProgress.splitlines()
 
-        assert "✓    [" in renderedProgress
+        assert "✓" in renderedProgress
+        assert any(
+            re.search(r"\[\d+(?:\.\d+)?s\]|\[\d+m \d{2}s\]", line)
+            for line in progressLines
+            if "Test play" in line
+        )
+        assert any(
+            re.search(r"\[\d+(?:\.\d+)?s\]|\[\d+m \d{2}s\]", line)
+            for line in progressLines
+            if "setup" in line
+        )
         assert all(line.index("✓") > 70 for line in progressLines)
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 0
@@ -141,13 +173,80 @@ async def testTuiRunPanelSpaceReturnsAfterCompletedRun(
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause(0.5)
+        await waitForRunComplete(pilot)
 
-        assert str(pilot.app.query_one("#run-status", Static).content) == (
-            "Finished: success"
+        assert str(pilot.app.query_one("#run-status", Static).content).startswith(
+            "Finished: success  elapsed="
         )
 
         await pilot.press("space")
+
+        assert pilot.app.query_one("#launch-menu", LaunchScreen)
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelShowsFailureDetails(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify failed runs show compact failure details and log path."""
+
+    _writeFailingFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runFailure = pilot.app.query_one("#run-failure", Static)
+        runProgress = pilot.app.query_one("#run-progress", Static)
+        runStatus = pilot.app.query_one("#run-status", Static)
+        renderedFailure = _renderRich(runFailure.content)
+        renderedProgress = _renderRich(runProgress.content)
+
+        assert not runStatus.display
+        assert runFailure.display
+        assert "✗ Failure" in renderedFailure
+        assert "failedAt" in renderedFailure
+        assert "Fail play / setup / Break host" in renderedFailure
+        assert "elapsed" in renderedFailure
+        assert "log" in renderedFailure
+        assert "✗ Failure" not in renderedProgress
+        assert "recentOutput:" not in renderedFailure
+        assert "simulated failure" not in renderedFailure
+        assert runScreen.result is not None
+        assert runScreen.result.logPath is not None
+        assert f"logs/{runScreen.result.logPath.name}" in renderedFailure
+        assert [(row.icon, row.name, row.status) for row in runScreen.progressRows] == [
+            ("🎭", "Fail play", "failed"),
+            ("⚙", "setup", "failed"),
+            ("🔧", "Break host", "failed"),
+        ]
+        renderedLines = renderedProgress.splitlines()
+        assert any(
+            re.search(r"\[\d+(?:\.\d+)?s\]|\[\d+m \d{2}s\]", line)
+            for line in renderedLines
+            if "Fail play" in line
+        )
+        assert any(
+            re.search(r"\[\d+(?:\.\d+)?s\]|\[\d+m \d{2}s\]", line)
+            for line in renderedLines
+            if "setup" in line
+        )
+        assert any(
+            re.search(r"\[\d+(?:\.\d+)?s\]|\[\d+m \d{2}s\]", line)
+            for line in renderedLines
+            if "Break host" in line
+        )
+
+        await pilot.press("enter")
 
         assert pilot.app.query_one("#launch-menu", LaunchScreen)
 
@@ -173,13 +272,17 @@ async def testTuiRunPanelCanCancelActiveRun(
         await pilot.pause(0.2)
         pilot.app.query_one("#run-menu", RunScreen).focus()
 
+        assert str(pilot.app.query_one("#run-status", Static).content).startswith(
+            "Running  elapsed="
+        )
+
         await pilot.press("c")
         await pilot.pause(0.5)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
 
-        assert str(runStatus.content) == "Finished: canceled"
+        assert str(runStatus.content).startswith("Finished: canceled  elapsed=")
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 130
 
@@ -215,7 +318,7 @@ async def testTuiRunPanelEnterSendsInputToActiveRun(
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
 
-        assert str(runStatus.content) == "Finished: success"
+        assert str(runStatus.content).startswith("Finished: success  elapsed=")
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 0
         assert any("waiting for input" in line for line in runScreen.outputLines)
@@ -256,7 +359,7 @@ async def testTuiRunPanelShowsPromptCardAndRecordsInteraction(
         runStatus = pilot.app.query_one("#run-status", Static)
         renderedProgress = _renderRich(runProgress.content)
 
-        assert str(runStatus.content) == "Finished: success"
+        assert str(runStatus.content).startswith("Finished: success  elapsed=")
         assert "💬 wait of input to continue — continued" in renderedProgress
         assert "💬 wait for user input — continued" not in renderedProgress
         assert runScreen.activePromptMessage is None
@@ -280,14 +383,14 @@ async def testTuiRunPanelClearsPromptCardWhenRunFinishes(
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause(0.5)
+        await waitForRunComplete(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runProgress = pilot.app.query_one("#run-progress", Static)
         renderedProgress = _renderRich(runProgress.content)
 
-        assert str(pilot.app.query_one("#run-status", Static).content) == (
-            "Finished: success"
+        assert str(pilot.app.query_one("#run-status", Static).content).startswith(
+            "Finished: success  elapsed="
         )
         assert "💬 Input" not in renderedProgress
         assert "💬 wait of input to continue — continued" in renderedProgress
@@ -322,7 +425,7 @@ async def testTuiRunPanelEscapeCancelsActiveRunAndStaysInApp(
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
 
-        assert str(runStatus.content) == "Finished: canceled"
+        assert str(runStatus.content).startswith("Finished: canceled  elapsed=")
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 130
 
@@ -354,7 +457,7 @@ async def testTuiRunPanelQuitDoesNotCancelActiveRun(
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         runStatus = pilot.app.query_one("#run-status", Static)
 
-        assert str(runStatus.content) != "Finished: canceled"
+        assert not str(runStatus.content).startswith("Finished: canceled")
         assert runScreen.running
         assert runScreen.result is None
 
@@ -449,6 +552,26 @@ def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
         "  echo $arg\n"
         "done\n"
         f"exit {exitCode}\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeFailingFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook executable that fails."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/bin/sh\n"
+        "echo 'PLAY [Fail play] ********'\n"
+        "echo 'TASK [setup : Break host] ********'\n"
+        "echo 'fatal: [localhost]: FAILED! => {\"msg\": \"simulated failure\"}'\n"
+        "echo 'PLAY RECAP ********'\n"
+        "echo 'localhost : ok=0 changed=0 unreachable=0 failed=1'\n"
+        "exit 2\n",
         encoding="utf-8",
     )
     executable.chmod(0o755)

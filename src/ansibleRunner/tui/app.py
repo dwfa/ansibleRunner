@@ -88,6 +88,10 @@ class AnsibleRunnerTui(App[int]):
         width: 92%;
     }
 
+    #run-panel {
+        height: 90%;
+    }
+
     #playbook-title,
     #configure-prefix,
     #configure-title,
@@ -169,11 +173,23 @@ class AnsibleRunnerTui(App[int]):
         margin-bottom: 1;
     }
 
-    #run-progress {
+    #run-failure {
+        display: none;
+        height: auto;
+        margin-bottom: 1;
+        width: 100%;
+    }
+
+    #run-progress-scroll {
         background: $surface;
         height: 1fr;
         min-height: 10;
         padding: 1 1;
+    }
+
+    #run-progress {
+        height: auto;
+        width: 100%;
     }
 
     #playbook-help,

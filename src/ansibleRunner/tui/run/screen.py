@@ -27,7 +27,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.widgets import Static
 
 from ansibleRunner.defaults import RuntimeDefaults
@@ -114,6 +114,8 @@ class RunScreen(Container):
         self.activePromptStart: float = 0.0
         self.pendingPromptMessage: str | None = None
         self.suppressNextPromptTask = False
+        self.runEndTime: float | None = None
+        self.runStartTime = 0.0
         self.running = False
         self.spinnerIndex = 0
         self.outputLines: list[str] = []
@@ -134,7 +136,12 @@ class RunScreen(Container):
                 yield Static("Args", id="run-args-label")
                 yield Static(self.argsDisplay, id="run-args-value")
             yield Static("Starting ...", id="run-status")
-            yield Static(Text("Waiting for Ansible progress ...", style="dim"), id="run-progress")
+            yield Static("", id="run-failure")
+            with VerticalScroll(id="run-progress-scroll"):
+                yield Static(
+                    Text("Waiting for Ansible progress ...", style="dim"),
+                    id="run-progress",
+                )
             yield Static(
                 "Enter/Space continue  c/Esc cancel  Ctrl-C exit  Ctrl-Z suspend",
                 id="run-help",
@@ -144,8 +151,9 @@ class RunScreen(Container):
         """Start the playbook run after mount."""
 
         self.focus()
+        self.runStartTime = monotonic()
         self.running = True
-        self.set_interval(1.0, self._refreshProgress)
+        self.set_interval(0.2, self._refreshProgress)
         self.run_worker(self._runPlaybook, thread=True)
 
     async def action_back(self) -> None:
@@ -258,6 +266,7 @@ class RunScreen(Container):
             result: Completed runner result.
         """
 
+        self.runEndTime = monotonic()
         self.result = result
         self.running = False
         self._finalizeProgress(result)
@@ -265,11 +274,14 @@ class RunScreen(Container):
         helpText = self.query_one("#run-help", Static)
         helpText.update("Enter/Space back")
         if result.returnCode == 0:
-            status.update("Finished: success")
+            status.display = True
+            status.update(f"Finished: success  elapsed={self._runElapsedText()}")
         elif result.returnCode == 130:
-            status.update("Finished: canceled")
+            status.display = True
+            status.update(f"Finished: canceled  elapsed={self._runElapsedText()}")
         else:
-            status.update(f"Finished: failed ({result.returnCode})")
+            status.update("")
+            status.display = False
         if result.stderr:
             self._appendOutput(result.stderr)
         if result.logPath:
@@ -372,7 +384,17 @@ class RunScreen(Container):
 
         if self.running:
             self.progressRows = self.progressParser.rows(monotonic())
+            status = self.query_one("#run-status", Static)
+            status.display = True
+            status.update(f"Running  elapsed={self._runElapsedText()}")
 
+        failure = self.query_one("#run-failure", Static)
+        if self._shouldRenderFailureDetails():
+            failure.display = True
+            failure.update(self._renderFailurePanel())
+        else:
+            failure.display = False
+            failure.update("")
         progress = self.query_one("#run-progress", Static)
         progress.update(self._renderProgress())
 
@@ -391,12 +413,12 @@ class RunScreen(Container):
         table = Table.grid(expand=True, padding=(0, 2))
         table.add_column(no_wrap=True, overflow="ellipsis", ratio=1)
         table.add_column(justify="right", no_wrap=True, width=1)
-        table.add_column(justify="right", no_wrap=True, width=8)
+        table.add_column(justify="right", no_wrap=True, width=9)
         for row in self.progressRows:
             table.add_row(
                 self._rowLabel(row),
                 Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
-                Text(self._formatDuration(row.duration), style="dim"),
+                Text(self._rowTimer(row), style="dim"),
             )
         if self.activePromptMessage is not None:
             return Group(table, self._renderPromptCard())
@@ -444,6 +466,85 @@ class RunScreen(Container):
             title_align="center",
         )
 
+    def _renderFailurePanel(self) -> Panel:
+        """Render compact failure details.
+
+        Returns:
+            Rich panel with failure location and log path.
+        """
+
+        details = Text()
+        details.append("failedAt  ", style="bold")
+        details.append(f"{self._failedAtText()}\n", style="bright_white")
+        details.append("elapsed   ", style="bold")
+        details.append(f"{self._runElapsedText()}\n", style="bright_black")
+        details.append("log       ", style="bold")
+        details.append(str(self._displayLogPath()), style="bright_black")
+        return Panel(
+            details,
+            border_style="red",
+            title="✗ Failure",
+            title_align="left",
+        )
+
+    def _shouldRenderFailureDetails(self) -> bool:
+        """Return whether failure details should be displayed."""
+
+        return (
+            self.result is not None
+            and self.result.returnCode not in {0, 130}
+            and not self.running
+        )
+
+    def _displayLogPath(self) -> str:
+        """Return a compact display path for the run log."""
+
+        if self.result is None or self.result.logPath is None:
+            return "unavailable"
+        try:
+            return str(self.result.logPath.relative_to(self.defaults.projectRoot))
+        except ValueError:
+            return str(self.result.logPath)
+
+    def _failedAtText(self) -> str:
+        """Return the deepest visible failed progress path."""
+
+        failedRows = [row for row in self.progressRows if row.status == "failed"]
+        if not failedRows:
+            return "unknown"
+        return " / ".join(row.name for row in failedRows)
+
+    def _runElapsedText(self) -> str:
+        """Return elapsed run time for the whole playbook run."""
+
+        if self.runStartTime <= 0:
+            return "0:00"
+        endTime = self.runEndTime or monotonic()
+        elapsedSeconds = max(0, int(endTime - self.runStartTime))
+        minutes, seconds = divmod(elapsedSeconds, 60)
+        return f"{minutes}:{seconds:02d}"
+
+    def _rowTimer(self, row: ProgressRow) -> str:
+        """Return the row-specific progress timer."""
+
+        return self._formatDuration(row.duration)
+
+    @staticmethod
+    def _formatDuration(duration: float) -> str:
+        """Format a compact row duration.
+
+        Args:
+            duration: Duration in seconds.
+
+        Returns:
+            Bracketed duration text for the progress table.
+        """
+
+        if duration >= 60:
+            minutes, seconds = divmod(int(duration), 60)
+            return f"[{minutes}m {seconds:02d}s]"
+        return f"[{max(0.0, duration):.1f}s]"
+
     @staticmethod
     def _rowLabel(row: ProgressRow) -> str:
         """Build the left-hand progress tree label.
@@ -476,23 +577,6 @@ class RunScreen(Container):
             self.spinnerIndex += 1
             return icon
         return STATUS_ICONS[status]
-
-    @staticmethod
-    def _formatDuration(duration: float) -> str:
-        """Format a duration for compact TUI display.
-
-        Args:
-            duration: Duration in seconds.
-
-        Returns:
-            Duration as a compact string.
-        """
-
-        totalSeconds = max(0, int(duration))
-        minutes, seconds = divmod(totalSeconds, 60)
-        if minutes:
-            return f"[{minutes}m {seconds:02d}s]"
-        return f"[{duration:.1f}s]"
 
     def _runPlaybook(self) -> None:
         """Run the selected playbook through the command runner."""
