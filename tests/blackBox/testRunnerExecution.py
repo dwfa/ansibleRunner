@@ -49,15 +49,26 @@ def testRunPlaybookWritesMergedOutputToLog(
     assert result.returnCode == 0
     assert result.logPath is not None
     assert result.logPath.is_file()
+    assert result.eventLogPath is not None
+    assert result.eventLogPath.is_file()
     assert "Running site playbook ..." in output
+    assert f"Event log: {result.eventLogPath}" in output
 
     logText = result.logPath.read_text(encoding="utf-8")
+    assert "native_ansible_log=1" in logText
     assert "cwd=" + str(tmp_path) in logText
     assert "PYTHONUNBUFFERED=1" in logText
     assert "ANSIBLE_DISPLAY_SKIPPED_HOSTS=false" in logText
+    assert "ANSIBLE_LOG_PATH=" + str(result.logPath) in logText
+    assert "ANSIBLE_CALLBACKS_ENABLED=" in logText
+    assert "ansible_runner_events" in logText
+    assert "ANSIBLE_CALLBACK_PLUGINS=" in logText
+    assert "ANSIBLE_RUNNER_EVENT_LOG=" + str(result.eventLogPath) in logText
     assert "nodes=web" in logText
     assert "--limit" in logText
     assert "one" in logText
+    assert "Running site playbook ..." not in logText
+    assert "fake_event=1" in result.eventLogPath.read_text(encoding="utf-8")
 
 
 def testRunChainStopsAtFirstFailure(tmp_path: Path, monkeypatch: Any) -> None:
@@ -163,7 +174,7 @@ def testRunPlaybookCanReceiveInput(tmp_path: Path, monkeypatch: Any) -> None:
 
 
 def testRunPlaybookPrunesOldRunLogs(tmp_path: Path, monkeypatch: Any) -> None:
-    """Verify playbook run logs keep only the newest five files."""
+    """Verify native Ansible run logs keep only the newest five files."""
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     playbook = tmp_path / "playbooks" / "site.yaml"
@@ -175,6 +186,9 @@ def testRunPlaybookPrunesOldRunLogs(tmp_path: Path, monkeypatch: Any) -> None:
         logPath = logDir / f"site-20260719-12000{index}.log"
         logPath.write_text(f"old {index}\n", encoding="utf-8")
         os.utime(logPath, (index, index))
+        eventLogPath = logPath.with_suffix(".events.jsonl")
+        eventLogPath.write_text(f"old event {index}\n", encoding="utf-8")
+        os.utime(eventLogPath, (index, index))
     unrelatedLog = logDir / "shim-20260719-120000.log"
     unrelatedLog.write_text("shim\n", encoding="utf-8")
 
@@ -182,7 +196,17 @@ def testRunPlaybookPrunesOldRunLogs(tmp_path: Path, monkeypatch: Any) -> None:
     result = runner.runPlaybook("playbooks/site.yaml", "web", echoOutput=False)
 
     assert result.returnCode == 0
-    assert len(sorted(logDir.glob("site-*.log"))) == 5
+    siteLogs = sorted(logDir.glob("site-*.log"))
+
+    assert len(siteLogs) == 5
+    assert result.logPath in siteLogs
+    assert result.eventLogPath is not None
+    assert result.eventLogPath.is_file()
+    assert result.logPath.read_text(encoding="utf-8").startswith(
+        "native_ansible_log=1"
+    )
+    assert not (logDir / "site-20260719-120000.events.jsonl").exists()
+    assert not (logDir / "site-20260719-120001.events.jsonl").exists()
     assert unrelatedLog.is_file()
 
 
@@ -194,9 +218,29 @@ def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any, exitCode: int) -> None:
     executable = binDir / "ansible-playbook"
     executable.write_text(
         "#!/bin/sh\n"
+        "if [ -n \"$ANSIBLE_LOG_PATH\" ]; then\n"
+        "  {\n"
+        "    echo native_ansible_log=1\n"
+        "    echo cwd=$(pwd)\n"
+        "    echo PYTHONUNBUFFERED=$PYTHONUNBUFFERED\n"
+        "    echo ANSIBLE_DISPLAY_SKIPPED_HOSTS=$ANSIBLE_DISPLAY_SKIPPED_HOSTS\n"
+        "    echo ANSIBLE_LOG_PATH=$ANSIBLE_LOG_PATH\n"
+        "    echo ANSIBLE_CALLBACKS_ENABLED=$ANSIBLE_CALLBACKS_ENABLED\n"
+        "    echo ANSIBLE_CALLBACK_PLUGINS=$ANSIBLE_CALLBACK_PLUGINS\n"
+        "    echo ANSIBLE_RUNNER_EVENT_LOG=$ANSIBLE_RUNNER_EVENT_LOG\n"
+        "    for arg in \"$@\"; do\n"
+        "      echo $arg\n"
+        "    done\n"
+        "  } > \"$ANSIBLE_LOG_PATH\"\n"
+        "fi\n"
+        "if [ -n \"$ANSIBLE_RUNNER_EVENT_LOG\" ]; then\n"
+        "  echo fake_event=1 > \"$ANSIBLE_RUNNER_EVENT_LOG\"\n"
+        "fi\n"
         "echo cwd=$(pwd)\n"
         "echo PYTHONUNBUFFERED=$PYTHONUNBUFFERED\n"
         "echo ANSIBLE_DISPLAY_SKIPPED_HOSTS=$ANSIBLE_DISPLAY_SKIPPED_HOSTS\n"
+        "echo ANSIBLE_LOG_PATH=$ANSIBLE_LOG_PATH\n"
+        "echo ANSIBLE_RUNNER_EVENT_LOG=$ANSIBLE_RUNNER_EVENT_LOG\n"
         "for arg in \"$@\"; do\n"
         "  echo $arg\n"
         "done\n"

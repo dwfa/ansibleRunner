@@ -83,7 +83,7 @@ def testInstallPackageAlwaysInstallsWheel(monkeypatch: Any, tmp_path: Path) -> N
     """Verify ansibleRunner always installs from the configured wheel."""
 
     shim = _loadShimModule()
-    wheelPath = tmp_path / "ansiblerunner-0.1.0-py3-none-any.whl"
+    wheelPath = tmp_path / "ansiblerunner-1.0.0-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     logPath = tmp_path / "logs" / "shim.log"
     calls: list[list[str]] = []

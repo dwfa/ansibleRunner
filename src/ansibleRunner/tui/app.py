@@ -192,6 +192,35 @@ class AnsibleRunnerTui(App[int]):
         width: 100%;
     }
 
+    #run-prompt-panel {
+        border: round green;
+        display: none;
+        height: auto;
+        margin-top: 1;
+        padding: 0 1;
+        width: 100%;
+    }
+
+    #run-prompt-title {
+        color: green;
+        content-align: center middle;
+        text-style: bold;
+        width: 100%;
+    }
+
+    #run-prompt-message {
+        text-style: bold;
+    }
+
+    #run-prompt-input {
+        margin: 1 0 0 0;
+        width: 100%;
+    }
+
+    #run-prompt-help {
+        color: $text-muted;
+    }
+
     #playbook-help,
     #configure-help,
     #launch-help,

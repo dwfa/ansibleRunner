@@ -1,0 +1,11 @@
+prune build
+prune dist
+prune logs
+prune scripts
+prune tests
+
+global-exclude .DS_Store
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .pytest_cache
+global-exclude .coverage

@@ -62,6 +62,93 @@ def testParserFinalizesCompletedRoleTaskAndPlay() -> None:
     assert rows[2].duration == 2.0
 
 
+def testParserAttributesQuietGapToNextTask() -> None:
+    """Verify delayed task headers receive the preceding quiet elapsed time."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create RPi Image] ****************", now=1.0)
+    parser.processLine("TASK [createRPiImage : Set image path (remote)] *****", now=2.0)
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.processLine("TASK [createRPiImage : Copy image to remote host] *****", now=68.0)
+    parser.processLine("changed: [installer]", now=68.0)
+    parser.finalizePlay(now=69.0)
+
+    rows = parser.rows(now=70.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "succeeded"),
+        ("⚙", "createRPiImage", "succeeded"),
+        ("🔧", "Set image path (remote)", "succeeded"),
+        ("🔧", "Copy image to remote host", "succeeded"),
+    ]
+    assert rows[2].duration == 1.0
+    assert rows[3].duration == 65.0
+
+
+def testParserMergesRealTaskHeaderIntoSyntheticTask() -> None:
+    """Verify predicted tasks stay active until their real result arrives."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create RPi Image] ****************", now=1.0)
+    parser.processLine("TASK [createRPiImage : confirm write operation] *****", now=2.0)
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.startSyntheticTask(
+        "createRPiImage : Writing image to device",
+        now=3.0,
+        aliases={"createRPiImage : write image to device"},
+    )
+
+    rows = parser.rows(now=53.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "running"),
+        ("⚙", "createRPiImage", "running"),
+        ("🔧", "confirm write operation", "succeeded"),
+        ("🔧", "Writing image to device", "running"),
+    ]
+    assert rows[3].duration == 50.0
+
+    parser.processLine("TASK [createRPiImage : write image to device] *****", now=63.0)
+    parser.processLine("changed: [installer]", now=63.0)
+    parser.finalizePlay(now=64.0)
+    rows = parser.rows(now=65.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "succeeded"),
+        ("⚙", "createRPiImage", "succeeded"),
+        ("🔧", "confirm write operation", "succeeded"),
+        ("🔧", "Writing image to device", "succeeded"),
+    ]
+    assert rows[3].duration == 60.0
+
+
+def testParserStartsSyntheticTaskFromCurrentRole() -> None:
+    """Verify predicted task helpers use the active role context."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create RPi Image] ****************", now=1.0)
+    parser.processLine("TASK [createRPiImage : Set image path (remote)] *****", now=2.0)
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.startSyntheticTaskFromCurrentRole(
+        "Copy image to remote host",
+        now=3.0,
+        aliases={"Copy image to remote host"},
+    )
+
+    rows = parser.rows(now=33.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "running"),
+        ("⚙", "createRPiImage", "running"),
+        ("🔧", "Set image path (remote)", "succeeded"),
+        ("🔧", "Copy image to remote host", "running"),
+    ]
+    assert rows[3].duration == 30.0
+
+
 def testParserSuppressesSkippedTasks() -> None:
     """Verify skipped tasks are omitted from visible task rows."""
 
@@ -101,6 +188,28 @@ def testParserSuppressesIncludedTasks() -> None:
         ("🎭", "Build image"),
         ("⚙", "manageImage"),
         ("🔧", "Configure service"),
+    ]
+
+
+def testParserSuppressesPromptImplementationTask() -> None:
+    """Verify prompt implementation tasks can be hidden from progress rows."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create image] ****************", now=1.0)
+    parser.processLine("TASK [getInstallDevice : wait for user input] *****", now=2.0)
+    parser.suppressActiveTask(now=2.1)
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.processLine("TASK [getInstallDevice : Next task] *****", now=4.0)
+    parser.processLine("ok: [installer]", now=5.0)
+    parser.finalizePlay(now=6.0)
+
+    rows = parser.rows(now=7.0)
+
+    assert [(row.icon, row.name) for row in rows] == [
+        ("🎭", "Create image"),
+        ("⚙", "getInstallDevice"),
+        ("🔧", "Next task"),
     ]
 
 

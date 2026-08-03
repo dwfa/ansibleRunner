@@ -30,7 +30,7 @@ def testMainRunsTestsBeforeWheelBuild(monkeypatch: Any, tmp_path: Path) -> None:
 
     build = _loadBuildModule()
     calls: list[str] = []
-    wheelPath = tmp_path / "dist" / "ansibleRunner-0.1.0-py3-none-any.whl"
+    wheelPath = tmp_path / "dist" / "ansibleRunner-1.0.0-py3-none-any.whl"
     wheelPath.parent.mkdir()
     wheelPath.write_text("wheel\n", encoding="utf-8")
 

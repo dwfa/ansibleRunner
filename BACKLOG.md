@@ -14,6 +14,14 @@
 
 # Backlog
 
+## P1
+
+- Support masked prompt input through an explicit prompt variable.
+  Text prompt input is visible by default to match `promptForInput` tasks that
+  use `echo: true`. Add a documented variable convention, such as
+  `promptHidden: true`, so playbooks can request password-style masking for
+  sensitive interactive values without making ordinary prompts harder to use.
+
 ## P2
 
 - Support orchestrator playbooks with phase-specific target variables.

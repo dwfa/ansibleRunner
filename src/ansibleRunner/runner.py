@@ -94,7 +94,8 @@ class RunnerResult:
         returnCode: Process return code.
         stdout: Captured standard output.
         stderr: Captured standard error.
-        logPath: Optional log path used for streamed playbook output.
+        logPath: Optional native Ansible log path for playbook output.
+        eventLogPath: Optional callback event log path for playbook execution.
     """
 
     command: tuple[str, ...]
@@ -102,6 +103,7 @@ class RunnerResult:
     stdout: str
     stderr: str
     logPath: Path | None = None
+    eventLogPath: Path | None = None
 
     @property
     def progress(self) -> RunProgress:
@@ -432,6 +434,7 @@ class AnsibleCommandRunner:
             )
 
         logPath = self._buildLogPath(playbookPath)
+        eventLogPath = self._buildEventLogPath(logPath)
         command = self.buildPlaybookCommand(playbook, node, runnerOptions)
         env = self._buildEnv(runnerOptions)
 
@@ -441,11 +444,13 @@ class AnsibleCommandRunner:
             echoOutput,
         )
         self._writeOutput(f"Logging to {logPath}\n", outputHandler, echoOutput)
+        self._writeOutput(f"Event log: {eventLogPath}\n", outputHandler, echoOutput)
 
         returnCode = self._execAndTee(
             command,
             env,
             logPath,
+            eventLogPath,
             outputHandler,
             echoOutput,
             runControl,
@@ -457,6 +462,7 @@ class AnsibleCommandRunner:
             stderr="",
             stdout="",
             logPath=logPath,
+            eventLogPath=eventLogPath,
         )
 
     def _buildEnv(self, options: RunnerOptions) -> dict[str, str]:
@@ -488,6 +494,12 @@ class AnsibleCommandRunner:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return self.logDir / f"{playbookPath.stem}-{timestamp}.log"
 
+    @staticmethod
+    def _buildEventLogPath(logPath: Path) -> Path:
+        """Build the callback event log path for a native Ansible log."""
+
+        return logPath.with_suffix(".events.jsonl")
+
     def _pruneRunLogs(
         self,
         playbookPath: Path,
@@ -513,6 +525,7 @@ class AnsibleCommandRunner:
                 continue
             try:
                 logPath.unlink()
+                self._buildEventLogPath(logPath).unlink(missing_ok=True)
             except FileNotFoundError:
                 continue
 
@@ -539,16 +552,18 @@ class AnsibleCommandRunner:
         command: Sequence[str],
         env: dict[str, str],
         logPath: Path,
+        eventLogPath: Path,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
         runControl: RunControl | None = None,
     ) -> int:
-        """Execute a command and tee merged output to stdout and a log.
+        """Execute a command and stream merged output while Ansible logs natively.
 
         Args:
             command: Command and arguments to execute.
             env: Environment for the subprocess.
-            logPath: File where merged output should be written.
+            eventLogPath: ansibleRunner callback event log path.
+            logPath: Native Ansible log path.
             outputHandler: Optional callback for each merged output line.
             echoOutput: Whether to echo merged output to stdout.
             runControl: Optional process cancellation control.
@@ -558,53 +573,52 @@ class AnsibleCommandRunner:
         """
 
         logPath.parent.mkdir(parents=True, exist_ok=True)
+        logPath.touch(exist_ok=True)
+        eventLogPath.touch(exist_ok=True)
+        env = self._withAnsibleEventLogging(env, logPath, eventLogPath)
         if os.name != "nt":
             return self._execAndTeePty(
                 command,
                 env,
-                logPath,
                 outputHandler,
                 echoOutput,
                 runControl,
             )
 
-        with logPath.open("w", encoding="utf-8") as logFile:
-            process = subprocess.Popen(
-                list(command),
-                cwd=self.projectRoot,
-                env=env,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                text=True,
-            )
-            if runControl is not None:
-                runControl.bind(process)
-            assert process.stdout is not None
-            self._teeOutput(process.stdout, logFile, outputHandler, echoOutput)
-            process.stdout.close()
-            returnCode = process.wait()
-            if runControl is not None:
-                runControl.clear()
-                if runControl.cancelled:
-                    return 130
-            return returnCode
+        process = subprocess.Popen(
+            list(command),
+            cwd=self.projectRoot,
+            env=env,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        if runControl is not None:
+            runControl.bind(process)
+        assert process.stdout is not None
+        self._teeOutput(process.stdout, outputHandler, echoOutput)
+        process.stdout.close()
+        returnCode = process.wait()
+        if runControl is not None:
+            runControl.clear()
+            if runControl.cancelled:
+                return 130
+        return returnCode
 
     def _execAndTeePty(
         self,
         command: Sequence[str],
         env: dict[str, str],
-        logPath: Path,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
         runControl: RunControl | None = None,
     ) -> int:
-        """Execute a command through a PTY and tee merged output.
+        """Execute a command through a PTY and stream merged output.
 
         Args:
             command: Command and arguments to execute.
             env: Environment for the subprocess.
-            logPath: File where merged output should be written.
             outputHandler: Optional callback for each merged output line.
             echoOutput: Whether to echo merged output to stdout.
             runControl: Optional process cancellation and input control.
@@ -634,44 +648,84 @@ class AnsibleCommandRunner:
                 return False
             return True
 
-        with logPath.open("w", encoding="utf-8") as logFile:
-            process = subprocess.Popen(
-                list(command),
-                close_fds=True,
-                cwd=self.projectRoot,
-                env=env,
-                preexec_fn=prepareChildPty,
-                stderr=slaveFd,
-                stdin=slaveFd,
-                stdout=slaveFd,
+        process = subprocess.Popen(
+            list(command),
+            close_fds=True,
+            cwd=self.projectRoot,
+            env=env,
+            preexec_fn=prepareChildPty,
+            stderr=slaveFd,
+            stdin=slaveFd,
+            stdout=slaveFd,
+        )
+        os.close(slaveFd)
+        if runControl is not None:
+            runControl.bind(
+                process,
+                writeInput,
+                cancelProcessGroup=True,
             )
-            os.close(slaveFd)
+        try:
+            self._teePtyOutput(
+                masterFd,
+                process,
+                outputHandler,
+                echoOutput,
+            )
+            returnCode = process.wait()
+        finally:
             if runControl is not None:
-                runControl.bind(
-                    process,
-                    writeInput,
-                    cancelProcessGroup=True,
-                )
+                runControl.clear()
             try:
-                self._teePtyOutput(
-                    masterFd,
-                    process,
-                    logFile,
-                    outputHandler,
-                    echoOutput,
-                )
-                returnCode = process.wait()
-            finally:
-                if runControl is not None:
-                    runControl.clear()
-                try:
-                    os.close(masterFd)
-                except OSError:
-                    pass
+                os.close(masterFd)
+            except OSError:
+                pass
 
         if runControl is not None and runControl.cancelled:
             return 130
         return returnCode
+
+    def _withAnsibleEventLogging(
+        self,
+        env: dict[str, str],
+        logPath: Path,
+        eventLogPath: Path,
+    ) -> dict[str, str]:
+        """Add native Ansible and ansibleRunner callback logging to env."""
+
+        callbackDir = Path(__file__).resolve().parent / "ansible_callbacks"
+        return {
+            **env,
+            "ANSIBLE_CALLBACK_PLUGINS": self._appendPathEnv(
+                env.get("ANSIBLE_CALLBACK_PLUGINS"),
+                callbackDir,
+            ),
+            "ANSIBLE_CALLBACKS_ENABLED": self._appendCsvEnv(
+                env.get("ANSIBLE_CALLBACKS_ENABLED"),
+                "ansible_runner_events",
+            ),
+            "ANSIBLE_LOG_PATH": str(logPath),
+            "ANSIBLE_RUNNER_EVENT_LOG": str(eventLogPath),
+        }
+
+    @staticmethod
+    def _appendPathEnv(existing: str | None, path: Path) -> str:
+        """Append a path to an environment path list if missing."""
+
+        pathText = str(path)
+        parts = [part for part in (existing or "").split(os.pathsep) if part]
+        if pathText not in parts:
+            parts.append(pathText)
+        return os.pathsep.join(parts)
+
+    @staticmethod
+    def _appendCsvEnv(existing: str | None, value: str) -> str:
+        """Append a value to a comma-separated environment value if missing."""
+
+        parts = [part.strip() for part in (existing or "").split(",") if part.strip()]
+        if value not in parts:
+            parts.append(value)
+        return ",".join(parts)
 
     def _resolvePlaybookPath(self, playbook: str | Path) -> Path:
         """Resolve a playbook path for filesystem validation.
@@ -721,23 +775,19 @@ class AnsibleCommandRunner:
     def _emitOutput(
         self,
         text: str,
-        logFile: TextIO,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
     ) -> None:
-        """Emit output to stdout, a log file, and an optional callback.
+        """Emit output to stdout and an optional callback.
 
         Args:
             text: Text to emit.
-            logFile: Writable log file stream.
             outputHandler: Optional callback for output text.
             echoOutput: Whether to echo output to stdout.
         """
 
         if echoOutput:
             print(text, end="")
-        logFile.write(text)
-        logFile.flush()
         if outputHandler is not None:
             outputHandler(text)
 
@@ -745,16 +795,14 @@ class AnsibleCommandRunner:
         self,
         masterFd: int,
         process: subprocess.Popen[bytes],
-        logFile: TextIO,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
     ) -> None:
-        """Read PTY output and tee complete lines.
+        """Read PTY output and emit complete lines.
 
         Args:
             masterFd: PTY master file descriptor.
             process: Running subprocess.
-            logFile: Writable log file stream.
             outputHandler: Optional callback for each output line.
             echoOutput: Whether to echo merged output to stdout.
         """
@@ -785,27 +833,24 @@ class AnsibleCommandRunner:
                 line, outputBuffer = outputBuffer.split("\n", 1)
                 self._emitOutput(
                     f"{line}\n",
-                    logFile,
                     outputHandler,
                     echoOutput,
                 )
 
         outputBuffer += self._cleanPtyText(decoder.decode(b"", final=True))
         if outputBuffer:
-            self._emitOutput(outputBuffer, logFile, outputHandler, echoOutput)
+            self._emitOutput(outputBuffer, outputHandler, echoOutput)
 
     @staticmethod
     def _teeOutput(
         source: TextIO,
-        logFile: TextIO,
         outputHandler: OutputHandler | None = None,
         echoOutput: bool = True,
     ) -> None:
-        """Write subprocess output to stdout and a log file.
+        """Write subprocess output to stdout and an optional callback.
 
         Args:
             source: Text stream from the subprocess.
-            logFile: Writable log file stream.
             outputHandler: Optional callback for each merged output line.
             echoOutput: Whether to echo merged output to stdout.
         """
@@ -813,8 +858,6 @@ class AnsibleCommandRunner:
         for line in source:
             if echoOutput:
                 print(line, end="")
-            logFile.write(line)
-            logFile.flush()
             if outputHandler is not None:
                 outputHandler(line)
 

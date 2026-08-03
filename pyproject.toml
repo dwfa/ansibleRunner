@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ansibleRunner"
-version = "0.1.0"
+version = "1.0.0"
 description = "Reusable TUI and Ansible runner logic for project-local management tools."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE.md"]
 keywords = ["ansible", "tui", "runner", "automation"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
@@ -45,6 +45,7 @@ Issues = "https://github.com/dwfa/ansibleRunner/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["tests", "tests.*"]
 
 [tool.pytest.ini_options]
 python_files = ["test*.py"]

@@ -100,7 +100,9 @@ class AnsibleProgressParser:
         self.currentPlay: ProgressItem | None = None
         self.currentRole: ProgressItem | None = None
         self.currentTask: ProgressItem | None = None
+        self.idleStartTime: float | None = None
         self.outputLevel: OutputLevel = outputLevel
+        self.syntheticTaskAliases: set[str] = set()
 
     def processLine(self, line: str, now: float) -> None:
         """Process one cleaned Ansible output line.
@@ -116,11 +118,15 @@ class AnsibleProgressParser:
         if playMatch:
             self.finalizePlay(now)
             self.currentPlay = ProgressItem(playMatch.group(1), now)
+            self.idleStartTime = None
             return
 
         taskMatch = TASK_PATTERN.match(cleanLine) or HANDLER_PATTERN.match(cleanLine)
         if taskMatch:
-            self._startTask(taskMatch.group(1), now)
+            taskHeader = taskMatch.group(1)
+            if self._matchesSyntheticTaskAlias(taskHeader):
+                return
+            self._startTask(taskHeader, now)
             return
 
         if INCLUDED_PATTERN.match(cleanLine):
@@ -189,6 +195,60 @@ class AnsibleProgressParser:
             self.currentTask.aborted = True
         self.finalizePlay(now)
 
+    def suppressActiveTask(self, now: float) -> None:
+        """Suppress the active task as structural/internal output.
+
+        Args:
+            now: Timestamp for the structural output.
+        """
+
+        self._suppressCurrentTask(now)
+
+    def startSyntheticTask(
+        self,
+        taskHeader: str,
+        now: float,
+        aliases: set[str] | None = None,
+    ) -> None:
+        """Start a predicted task before Ansible emits its real task header.
+
+        Args:
+            aliases: Real task headers that should merge into the synthetic task.
+            now: Timestamp for the synthetic task start.
+            taskHeader: Display task header in Ansible ``role : task`` form.
+        """
+
+        self._startTask(taskHeader, now, useIdleStart=False)
+        self.syntheticTaskAliases = {
+            self._normalizeTaskHeader(alias) for alias in (aliases or set())
+        }
+
+    def startSyntheticTaskFromCurrentRole(
+        self,
+        taskName: str,
+        now: float,
+        aliases: set[str] | None = None,
+    ) -> None:
+        """Start a predicted task under the currently active role.
+
+        Args:
+            aliases: Real task names that should merge into the synthetic task.
+            now: Timestamp for the synthetic task start.
+            taskName: Display task name without the role prefix.
+        """
+
+        if self.currentRole is None:
+            return
+        roleName = self.currentRole.name
+        self.startSyntheticTask(
+            f"{roleName} : {taskName}",
+            now,
+            {
+                f"{roleName} : {alias}"
+                for alias in (aliases or set())
+            },
+        )
+
     def _appendPlayRows(
         self,
         rows: list[ProgressRow],
@@ -243,6 +303,8 @@ class AnsibleProgressParser:
             return
         if self.currentTask.sawResult and not self.currentTask.sawExecutedResult:
             self.currentTask = None
+            self.idleStartTime = now
+            self.syntheticTaskAliases = set()
             return
         self.currentTask.duration = now - self.currentTask.startTime
         if self.currentRole is not None:
@@ -250,6 +312,8 @@ class AnsibleProgressParser:
         else:
             self.currentPlay.tasks.append(self.currentTask)
         self.currentTask = None
+        self.idleStartTime = now
+        self.syntheticTaskAliases = set()
 
     def _markFailure(self) -> None:
         """Mark active items as failed."""
@@ -280,6 +344,7 @@ class AnsibleProgressParser:
         value: str,
         duration: float,
         aborted: bool = False,
+        failed: bool = False,
     ) -> None:
         """Record a completed prompt interaction.
 
@@ -288,6 +353,7 @@ class AnsibleProgressParser:
             value: User-facing response result.
             duration: Time spent handling the prompt.
             aborted: Whether the interaction aborted the run.
+            failed: Whether the interaction failed before completion.
         """
 
         if self.currentPlay is None:
@@ -297,6 +363,7 @@ class AnsibleProgressParser:
             startTime=0.0,
             aborted=aborted,
             duration=duration,
+            failed=failed,
             result=value,
         )
         if self.currentRole is not None:
@@ -341,22 +408,49 @@ class AnsibleProgressParser:
         self._finalizeRole(now)
         self.currentRole = ProgressItem(roleName, now)
 
-    def _startTask(self, taskHeader: str, now: float) -> None:
+    def _startTask(
+        self,
+        taskHeader: str,
+        now: float,
+        useIdleStart: bool = True,
+    ) -> None:
         """Start a task, inferring role from Ansible task header."""
 
         if self.currentPlay is None:
             return
+        taskStartTime = (
+            self.idleStartTime
+            if useIdleStart and self.currentTask is None
+            else None
+        )
         self._finalizeTask(now)
+        if taskStartTime is None:
+            taskStartTime = now
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
-            self._startRole(roleName, now)
+            self._startRole(roleName, taskStartTime)
         else:
             self._finalizeRole(now)
             taskName = taskHeader
-        self.currentTask = ProgressItem(taskName, now)
+        self.currentTask = ProgressItem(taskName, taskStartTime)
+        self.idleStartTime = None
 
     @staticmethod
     def _taskIsVisible(task: ProgressItem) -> bool:
         """Return whether a task should be shown in progress rows."""
 
         return not task.sawResult or task.sawExecutedResult
+
+    def _matchesSyntheticTaskAlias(self, taskHeader: str) -> bool:
+        """Return whether an Ansible header should merge into a synthetic task."""
+
+        return (
+            self.currentTask is not None
+            and self._normalizeTaskHeader(taskHeader) in self.syntheticTaskAliases
+        )
+
+    @staticmethod
+    def _normalizeTaskHeader(taskHeader: str) -> str:
+        """Normalize task headers for alias matching."""
+
+        return " ".join(taskHeader.lower().split())
