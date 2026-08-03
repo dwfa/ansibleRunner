@@ -60,8 +60,13 @@ def testEnsureVenvCreatesMissingEnvironment(monkeypatch: Any, tmp_path: Path) ->
 
     monkeypatch.setattr(installer.subprocess, "run", fakeRun)
 
-    installer.ensureVenv(tmp_path / ".venv", "python3")
+    created = installer.ensureVenv(
+        tmp_path / ".venv",
+        "python3",
+        tmp_path / "install.log",
+    )
 
+    assert created is True
     assert calls == [["python3", "-m", "venv", str(tmp_path / ".venv")]]
 
 
@@ -82,12 +87,17 @@ def testEnsureVenvReusesExistingEnvironment(
         lambda command, **kwargs: calls.append(command),
     )
 
-    installer.ensureVenv(tmp_path / ".venv", "python3")
+    created = installer.ensureVenv(
+        tmp_path / ".venv",
+        "python3",
+        tmp_path / "install.log",
+    )
 
+    assert created is False
     assert calls == []
 
 
-def testInstallPackageUsesVenvPip(monkeypatch: Any) -> None:
+def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
     """Verify pip installation runs inside the project virtual environment."""
 
     installer = _loadInstallerModule()
@@ -104,6 +114,7 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any) -> None:
     installer.installPackage(
         Path("/project/.venv/bin/python"),
         "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0",
+        tmp_path / "logs" / "install.log",
     )
 
     assert calls == [
@@ -113,9 +124,22 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any) -> None:
             "pip",
             "install",
             "--upgrade",
+            "--disable-pip-version-check",
             "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0",
         ]
     ]
+
+
+def testInstallLogPathUsesProjectLogs(tmp_path: Path) -> None:
+    """Verify installer logs are written under project logs."""
+
+    installer = _loadInstallerModule()
+
+    logPath = installer.getInstallLogPath(tmp_path)
+
+    assert logPath.parent == tmp_path / "logs"
+    assert logPath.name.startswith("ansibleRunner-install-")
+    assert logPath.suffix == ".log"
 
 
 def testWriteLauncherRunsInstalledPackage(tmp_path: Path) -> None:

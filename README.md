@@ -108,6 +108,8 @@ Files created by the installer:
 - `.venv/`: project-local Python virtual environment.
 - `ansibleRunner.py`: project-local launcher. This file knows the project root,
   so normal project usage does not require `--project-root`.
+- `logs/ansibleRunner-install-<timestamp>.log`: installer details, including
+  virtual environment and pip output.
 
 Files created while using the TUI:
 

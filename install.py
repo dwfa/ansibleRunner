@@ -25,8 +25,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+import textwrap
+import unicodedata
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -34,6 +39,208 @@ PACKAGE_NAME = "ansibleRunner"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
 DEFAULT_REF = "v1.0.0"
 DEFAULT_LAUNCHER_NAME = "ansibleRunner.py"
+GREEN_COLOUR = "\033[38;5;46m"
+MAUVE_COLOUR = "\033[38;5;213m"
+RESET_COLOUR = "\033[0m"
+SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
+
+
+@dataclass
+class InstallerUi:
+    """Terminal output helper for project installation.
+
+    Args:
+        logPath: Path receiving full install diagnostics.
+    """
+
+    logPath: Path
+    activeStep: str | None = None
+    activeStepHadSubsteps: bool = False
+
+    def header(self, projectRoot: Path, venvDir: Path) -> None:
+        """Print the installer header panel.
+
+        Args:
+            projectRoot: Ansible project root.
+            venvDir: Project virtual environment directory.
+        """
+
+        width = self._panelWidth()
+        innerWidth = width - 4
+        top = self._colour("╭" + ("─" * (width - 2)) + "╮")
+        bottom = self._colour("╰" + ("─" * (width - 2)) + "╯")
+        lines = [
+            f"{self._leftPadding(width)}{top}",
+            self._panelLine(
+                self._truncateRight(f"🚀 {PACKAGE_NAME} Installer ({DEFAULT_REF})", innerWidth),
+                width,
+            ),
+            self._panelLine("", width),
+        ]
+        for label, value in (
+            ("Project", projectRoot),
+            ("Venv", venvDir),
+            ("Log", self.logPath),
+        ):
+            detail = f"{label}: {value}"
+            wrappedLines = textwrap.wrap(detail, width=innerWidth) or [detail]
+            lines.extend(self._panelLine(line, width) for line in wrappedLines)
+        lines.append(f"{self._leftPadding(width)}{bottom}")
+        print("\n".join(lines), flush=True)
+
+    def step(self, title: str) -> None:
+        """Start an installer step.
+
+        Args:
+            title: Step title.
+        """
+
+        self.activeStep = title
+        self.activeStepHadSubsteps = False
+        print(self._stepLine(title, "•"), flush=True)
+
+    def finishStep(self, success: bool = True) -> None:
+        """Print completion status for the active step.
+
+        Args:
+            success: Whether the step completed successfully.
+        """
+
+        if self.activeStep is None:
+            return
+        if not self.activeStepHadSubsteps:
+            marker = self._green("✅") if success else "❌"
+            self.substep(marker)
+        self.activeStep = None
+        self.activeStepHadSubsteps = False
+
+    def substep(self, message: str) -> None:
+        """Print an indented detail line.
+
+        Args:
+            message: Detail text.
+        """
+
+        width = self._panelWidth()
+        detail = self._subtleWhite(f"    ╰─ {message}")
+        print(f"{self._leftPadding(width)}{detail}", flush=True)
+        self.activeStepHadSubsteps = True
+
+    def success(self, launcherPath: Path) -> None:
+        """Print final installer success details.
+
+        Args:
+            launcherPath: Generated project launcher path.
+        """
+
+        print(self._stepLine("🎉 Install complete", " ", self._green("✅")), flush=True)
+        self.substep(f"Launcher: {launcherPath}")
+        self.substep(f"Run: {launcherPath}")
+
+    def failure(self, message: str) -> None:
+        """Print installer failure details.
+
+        Args:
+            message: Failure message.
+        """
+
+        print(self._stepLine(message, " ", "❌"), flush=True)
+        self.substep(f"See log: {self.logPath}")
+
+    def _colour(self, text: str) -> str:
+        """Apply panel colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{MAUVE_COLOUR}{text}{RESET_COLOUR}"
+
+    def _green(self, text: str) -> str:
+        """Apply success colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{GREEN_COLOUR}{text}{RESET_COLOUR}"
+
+    def _subtleWhite(self, text: str) -> str:
+        """Apply secondary text colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{SUBTLE_WHITE_COLOUR}{text}{RESET_COLOUR}"
+
+    def _displayWidth(self, text: str) -> int:
+        """Calculate approximate terminal display width."""
+
+        width = 0
+        for character in text:
+            codepoint = ord(character)
+            if unicodedata.combining(character):
+                continue
+            if codepoint in {0xFE0E, 0xFE0F}:
+                continue
+            if (
+                0x1F000 <= codepoint <= 0x1FAFF
+                or 0x2600 <= codepoint <= 0x27BF
+                or unicodedata.east_asian_width(character) in {"F", "W"}
+            ):
+                width += 2
+            else:
+                width += 1
+        return width
+
+    def _padRight(self, text: str, width: int) -> str:
+        """Pad text to a target display width."""
+
+        return text + (" " * max(0, width - self._displayWidth(text)))
+
+    def _truncateRight(self, text: str, width: int) -> str:
+        """Truncate text to a target display width."""
+
+        if self._displayWidth(text) <= width:
+            return text
+        if width <= 1:
+            return "…"[:width]
+
+        output = ""
+        currentWidth = 0
+        targetWidth = width - 1
+        for character in text:
+            characterWidth = self._displayWidth(character)
+            if currentWidth + characterWidth > targetWidth:
+                break
+            output += character
+            currentWidth += characterWidth
+        return output + "…"
+
+    def _panelWidth(self) -> int:
+        """Calculate a centered panel width from the current terminal."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return max(50, min(columns, int(columns * 0.95)))
+
+    def _leftPadding(self, width: int) -> str:
+        """Calculate left padding for a centered block."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return " " * max(0, (columns - width) // 2)
+
+    def _panelLine(self, content: str, width: int) -> str:
+        """Format one header panel line."""
+
+        innerWidth = width - 4
+        left = self._colour("│")
+        right = self._colour("│")
+        return f"{self._leftPadding(width)}{left} {self._padRight(content, innerWidth)} {right}"
+
+    def _stepLine(self, title: str, prefix: str, suffix: str = "") -> str:
+        """Format an installer step line."""
+
+        width = self._panelWidth()
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        return f"{self._leftPadding(width)}{self._padRight(fittedLeft, availableWidth)}{suffix}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,15 +260,39 @@ def main(argv: list[str] | None = None) -> int:
         venvDir = projectRoot / venvDir
     packageSpec = getPackageSpec(args)
     launcherPath = projectRoot / args.launcherName
+    logPath = getInstallLogPath(projectRoot)
     venvPython = getVenvPython(venvDir)
+    ui = InstallerUi(logPath)
 
-    ensureVenv(venvDir, args.python)
-    installPackage(venvPython, packageSpec)
-    writeLauncher(launcherPath, venvDir)
+    ui.header(projectRoot, venvDir)
+    try:
+        ui.step("🧰 Prepare virtual environment")
+        venvCreated = ensureVenv(venvDir, args.python, logPath, args.verbose)
+        if venvCreated:
+            ui.substep(f"Created {venvDir} ✅")
+        else:
+            ui.substep(f"Using existing {venvDir} ✅")
+        ui.finishStep()
 
-    print(f"Installed {PACKAGE_NAME} into {venvDir}")
-    print(f"Launcher: {launcherPath}")
-    print(f"Run: {launcherPath}")
+        ui.step("📦 Install ansibleRunner")
+        installPackage(venvPython, packageSpec, logPath, args.verbose)
+        ui.substep(f"Installed {PACKAGE_NAME} ✅")
+        ui.finishStep()
+
+        ui.step("📝 Write project launcher")
+        writeLauncher(launcherPath, venvDir)
+        ui.substep(f"Wrote {launcherPath} ✅")
+        ui.finishStep()
+    except SystemExit:
+        ui.finishStep(False)
+        ui.failure("Install failed")
+        raise
+    except Exception as exc:
+        ui.finishStep(False)
+        ui.failure(f"Install failed: {exc}")
+        raise
+
+    ui.success(launcherPath)
     return 0
 
 
@@ -120,6 +351,12 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("ANSIBLE_RUNNER_LAUNCHER", DEFAULT_LAUNCHER_NAME),
         help="Project-local launcher filename to write.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=os.environ.get("ANSIBLE_RUNNER_INSTALL_VERBOSE") == "1",
+        help="Show venv and pip output instead of writing it only to the log.",
+    )
     return parser.parse_args(argv)
 
 
@@ -138,18 +375,47 @@ def getPackageSpec(args: argparse.Namespace) -> str:
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
 
 
-def ensureVenv(venvDir: Path, pythonBin: str) -> None:
+def getInstallLogPath(projectRoot: Path) -> Path:
+    """Return the project-local installer log path.
+
+    Args:
+        projectRoot: Ansible project root.
+
+    Returns:
+        Installer log path under ``logs``.
+    """
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return projectRoot / "logs" / f"ansibleRunner-install-{timestamp}.log"
+
+
+def ensureVenv(
+    venvDir: Path,
+    pythonBin: str,
+    logPath: Path,
+    verbose: bool = False,
+) -> bool:
     """Create the project-local virtual environment when missing.
 
     Args:
         venvDir: Virtual environment directory.
         pythonBin: Python executable used to create the virtual environment.
+        logPath: Installer log path.
+        verbose: Whether subprocess output should also appear on the terminal.
+
+    Returns:
+        True when a virtual environment was created.
     """
 
     if getVenvPython(venvDir).exists():
-        return
-    print(f"Creating virtual environment: {venvDir}")
-    subprocess.run([pythonBin, "-m", "venv", str(venvDir)], check=True)
+        return False
+    runLoggedCommand(
+        [pythonBin, "-m", "venv", str(venvDir)],
+        logPath,
+        "Create virtual environment",
+        verbose,
+    )
+    return True
 
 
 def getVenvPython(venvDir: Path) -> Path:
@@ -167,12 +433,19 @@ def getVenvPython(venvDir: Path) -> Path:
     return venvDir / "bin" / "python"
 
 
-def installPackage(pythonBin: Path, packageSpec: str) -> None:
+def installPackage(
+    pythonBin: Path,
+    packageSpec: str,
+    logPath: Path,
+    verbose: bool = False,
+) -> None:
     """Install ansibleRunner into the virtual environment.
 
     Args:
         pythonBin: Virtual environment Python executable.
         packageSpec: Pip package spec to install.
+        logPath: Installer log path.
+        verbose: Whether subprocess output should also appear on the terminal.
     """
 
     command = [
@@ -181,10 +454,55 @@ def installPackage(pythonBin: Path, packageSpec: str) -> None:
         "pip",
         "install",
         "--upgrade",
+        "--disable-pip-version-check",
         packageSpec,
     ]
-    print(f"Installing {packageSpec}")
-    subprocess.run(command, check=True)
+    runLoggedCommand(command, logPath, "Install ansibleRunner", verbose)
+
+
+def runLoggedCommand(
+    command: list[str],
+    logPath: Path,
+    title: str,
+    verbose: bool = False,
+) -> None:
+    """Run a subprocess and write command output to the installer log.
+
+    Args:
+        command: Command and arguments to run.
+        logPath: Installer log path.
+        title: Human-readable command title.
+        verbose: Whether subprocess output should also appear on the terminal.
+
+    Raises:
+        SystemExit: When the command fails.
+    """
+
+    logPath.parent.mkdir(parents=True, exist_ok=True)
+    with logPath.open("a", encoding="utf-8") as logFile:
+        logFile.write(f"## {title}\n")
+        logFile.write(f"command={' '.join(command)}\n\n")
+        logFile.flush()
+        if verbose:
+            result = subprocess.run(
+                command,
+                check=False,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        else:
+            result = subprocess.run(
+                command,
+                check=False,
+                stderr=subprocess.STDOUT,
+                stdout=logFile,
+                text=True,
+            )
+        logFile.write(f"\nexitCode={result.returncode}\n\n")
+
+    if result.returncode != 0:
+        print(f"See log: {logPath}", file=sys.stderr)
+        raise SystemExit(result.returncode)
 
 
 def writeLauncher(launcherPath: Path, venvDir: Path) -> None:
