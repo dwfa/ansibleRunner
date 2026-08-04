@@ -165,6 +165,72 @@ def testTuiRunPanelProcessesCallbackTaskLifecycle(tmp_path: Path) -> None:
     ]
 
 
+def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
+    """Verify niceDisplay callback results render as framed preformatted output."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "List Postgres Flexible Servers"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "name": (
+                    "listDBServers : niceDisplay: Postgres Flexible Servers "
+                    "matching cei-aztest- (1 found)"
+                ),
+                "role": "listDBServers",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "changed": False,
+                "msg": (
+                    "NAME  LOCATION\n"
+                    "----  --------\n"
+                    "db1   East US\n"
+                ),
+                "task": {
+                    "name": (
+                        "listDBServers : niceDisplay: Postgres Flexible Servers "
+                        "matching cei-aztest- (1 found)"
+                    ),
+                    "role": "listDBServers",
+                },
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert "niceDisplay: Postgres Flexible Servers" in renderedProgress
+    assert "Postgres Flexible Servers matching cei-aztest- (1 found)" in renderedProgress
+    assert "NAME  LOCATION" in renderedProgress
+    assert "db1   East US" in renderedProgress
+    assert "msg:" not in renderedProgress
+
+
+def testTuiRunPanelFormatsNiceDisplayListAndDictPayloads(tmp_path: Path) -> None:
+    """Verify supported niceDisplay payload shapes format without noise."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    assert runScreen._prettyPayloadBody(["one", "two"]) == "one\ntwo"
+    assert runScreen._prettyPayloadBody({"name": "db1", "region": "East US"}) == (
+        "name: db1\nregion: East US"
+    )
+
+
 @pytest.mark.asyncio
 async def testTuiRunPanelRunsSelectedPlaybook(
     tmp_path: Path,

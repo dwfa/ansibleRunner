@@ -22,6 +22,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Literal, cast
 
+from rich import box
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -39,6 +40,7 @@ from ansibleRunner.progressParser import (
     AnsibleProgressParser,
     INCLUDED_PATTERN,
     OutputLevel,
+    PrettyOutput,
     ProgressRow,
     RESULT_PATTERN,
 )
@@ -54,6 +56,10 @@ TASK_HEADER_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 ANSIBLE_LOG_RECORD_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} .+? INFO\| (.*)$")
 EVENT_LOG_PREFIX = "Event log: "
 RUN_LOG_PREFIX = "Logging to "
+PRETTY_OUTPUT_PREFIXES = {
+    # Prefix dispatch point for future wrappers such as nicePrompt/niceProgress.
+    "nicedisplay:": "display",
+}
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
     "aborted": "■",
@@ -489,6 +495,7 @@ class RunScreen(Container):
             "runner_unreachable",
             "runner_skipped",
         }:
+            self._recordPrettyOutputFromEvent(eventRecord)
             resultState = self._resultStateFromEvent(eventName)
             if resultState:
                 self.progressParser.processLine(f"{resultState}: [localhost]", now)
@@ -540,6 +547,91 @@ class RunScreen(Container):
         if eventName == "runner_skipped":
             return "skipping"
         return ""
+
+    def _recordPrettyOutputFromEvent(self, eventRecord: dict[str, object]) -> None:
+        """Record a pretty output block from a marked callback result event."""
+
+        resultRecord = self._eventResultRecord(eventRecord)
+        taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
+        taskName = self._displayTaskName(taskHeader)
+        outputKind = self._prettyOutputKind(taskName)
+        if outputKind != "display":
+            return
+        if resultRecord is None or "msg" not in resultRecord:
+            return
+        title = taskName.split(":", 1)[1].strip()
+        body = self._prettyPayloadBody(resultRecord.get("msg"))
+        if not title or not body:
+            return
+        self.progressParser.recordTaskOutput(taskHeader, title, body)
+
+    @staticmethod
+    def _eventResultRecord(
+        eventRecord: dict[str, object],
+    ) -> dict[str, object] | None:
+        """Return callback result payload from supported event shapes."""
+
+        resultRecord = eventRecord.get("result")
+        if isinstance(resultRecord, dict):
+            return resultRecord
+        rawResultRecord = eventRecord.get("res")
+        if isinstance(rawResultRecord, dict):
+            return rawResultRecord
+        return None
+
+    def _taskHeaderFromResultEvent(
+        self,
+        eventRecord: dict[str, object],
+        resultRecord: dict[str, object] | None,
+    ) -> str:
+        """Return a task header from a result event."""
+
+        if resultRecord is not None:
+            task = resultRecord.get("task")
+            if isinstance(task, dict):
+                return self._taskHeaderFromEvent(task)
+            if isinstance(task, str):
+                return task.strip()
+        task = eventRecord.get("task")
+        if isinstance(task, dict):
+            return self._taskHeaderFromEvent(task)
+        if isinstance(task, str):
+            return task.strip()
+        return ""
+
+    @staticmethod
+    def _displayTaskName(taskHeader: str) -> str:
+        """Return the display task name without a leading role prefix."""
+
+        if " : " in taskHeader:
+            return taskHeader.split(" : ", 1)[1].strip()
+        return taskHeader.strip()
+
+    @staticmethod
+    def _prettyOutputKind(taskName: str) -> str:
+        """Return the pretty output kind for a marked task name."""
+
+        normalizedName = taskName.lower()
+        for prefix, outputKind in PRETTY_OUTPUT_PREFIXES.items():
+            if normalizedName.startswith(prefix):
+                return outputKind
+        return ""
+
+    @classmethod
+    def _prettyPayloadBody(cls, payload: object) -> str:
+        """Format a supported pretty payload without reflowing text."""
+
+        if isinstance(payload, str):
+            return payload.rstrip("\n")
+        if isinstance(payload, list):
+            return "\n".join(str(item) for item in payload).rstrip("\n")
+        if isinstance(payload, dict):
+            return "\n".join(
+                f"{key}: {value}" for key, value in payload.items()
+            ).rstrip("\n")
+        if payload is None:
+            return ""
+        return str(payload).rstrip("\n")
 
     def _startPromptFromEvent(
         self,
@@ -714,12 +806,27 @@ class RunScreen(Container):
         table.add_column(justify="right", no_wrap=True, width=1)
         table.add_column(justify="right", no_wrap=True, width=9)
         for row in self.progressRows:
+            if row.output is not None:
+                table.add_row(self._prettyOutputPanel(row.output), Text(""), Text(""))
+                continue
             table.add_row(
                 self._rowLabel(row),
                 Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
                 Text(self._rowTimer(row), style="dim"),
             )
         return table
+
+    @staticmethod
+    def _prettyOutputPanel(output: PrettyOutput) -> Panel:
+        """Render a pretty output block preserving its body text."""
+
+        return Panel(
+            Text(output.body),
+            box=box.ROUNDED,
+            border_style="cyan",
+            title=Text(output.title, style="cyan"),
+            title_align="left",
+        )
 
     async def _handlePromptKey(self, event: events.Key) -> None:
         """Handle keyboard input while an Ansible prompt is active.

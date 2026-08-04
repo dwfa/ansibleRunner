@@ -59,6 +59,34 @@ def testParserIgnoresRepeatedActiveTaskHeader() -> None:
     assert rows[2].duration == 3.0
 
 
+def testParserRecordsPrettyTaskOutput() -> None:
+    """Verify task output blocks render below their owning task row."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [List servers] ****************", now=1.0)
+    parser.processLine("TASK [listDBServers : niceDisplay: Server summary] *****", now=2.0)
+    parser.recordTaskOutput(
+        "listDBServers : niceDisplay: Server summary",
+        "Server summary",
+        "NAME  LOCATION\n----  --------\ndb1   East US",
+    )
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.icon, row.name, row.output is not None) for row in rows] == [
+        ("🎭", "List servers", False),
+        ("⚙", "listDBServers", False),
+        ("🔧", "niceDisplay: Server summary", False),
+        ("", "", True),
+    ]
+    assert rows[3].output is not None
+    assert rows[3].output.title == "Server summary"
+    assert "db1   East US" in rows[3].output.body
+
+
 def testParserFinalizesCompletedRoleTaskAndPlay() -> None:
     """Verify completed rows have succeeded status and durations."""
 

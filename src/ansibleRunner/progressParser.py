@@ -37,6 +37,19 @@ ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @dataclass
+class PrettyOutput:
+    """Human-friendly output block associated with a progress task.
+
+    Args:
+        body: Preformatted body text.
+        title: Short output title.
+    """
+
+    title: str
+    body: str
+
+
+@dataclass
 class ProgressItem:
     """Mutable parsed progress item.
 
@@ -48,6 +61,7 @@ class ProgressItem:
         failed: Whether this item failed.
         result: Optional interaction result text.
         interactions: Prompt interactions under this item.
+        outputs: Human-friendly output blocks associated with this item.
         roles: Child role items.
         sawExecutedResult: Whether a task had a non-skipped result.
         sawResult: Whether a task had any result line.
@@ -61,6 +75,7 @@ class ProgressItem:
     failed: bool = False
     result: str = ""
     interactions: list["ProgressItem"] = field(default_factory=list)
+    outputs: list[PrettyOutput] = field(default_factory=list)
     roles: list["ProgressItem"] = field(default_factory=list)
     sawExecutedResult: bool = False
     sawResult: bool = False
@@ -76,6 +91,7 @@ class ProgressRow:
         duration: Elapsed or completed duration in seconds.
         icon: Emoji indicating item type.
         name: Display name.
+        output: Optional pretty output block.
         status: ``running``, ``succeeded``, ``failed``, or ``aborted``.
     """
 
@@ -84,6 +100,7 @@ class ProgressRow:
     icon: str
     name: str
     status: str
+    output: PrettyOutput | None = None
 
 
 class AnsibleProgressParser:
@@ -263,28 +280,51 @@ class AnsibleProgressParser:
             return
         if self.outputLevel == "task":
             for task in play.tasks:
-                rows.append(self._row(1, "🔧", task, now, False))
+                self._appendTaskRows(rows, 1, task, now, False)
         for interaction in play.interactions:
             rows.append(self._row(1, "💬", interaction, now, False))
         for role in play.roles:
             rows.append(self._row(1, "⚙", role, now, False))
             if self.outputLevel == "task":
                 for task in role.tasks:
-                    rows.append(self._row(2, "🔧", task, now, False))
+                    self._appendTaskRows(rows, 2, task, now, False)
             for interaction in role.interactions:
                 rows.append(self._row(2, "💬", interaction, now, False))
         if isActive and self.currentRole is not None:
             rows.append(self._row(1, "⚙", self.currentRole, now, True))
             if self.outputLevel == "task":
                 for task in self.currentRole.tasks:
-                    rows.append(self._row(2, "🔧", task, now, False))
+                    self._appendTaskRows(rows, 2, task, now, False)
             for interaction in self.currentRole.interactions:
                 rows.append(self._row(2, "💬", interaction, now, False))
             if self.currentTask is not None and self._taskIsVisible(self.currentTask):
-                rows.append(self._row(2, "🔧", self.currentTask, now, True))
+                self._appendTaskRows(rows, 2, self.currentTask, now, True)
         elif isActive and self.currentTask is not None:
             if self._taskIsVisible(self.currentTask):
-                rows.append(self._row(1, "🔧", self.currentTask, now, True))
+                self._appendTaskRows(rows, 1, self.currentTask, now, True)
+
+    def _appendTaskRows(
+        self,
+        rows: list[ProgressRow],
+        depth: int,
+        task: ProgressItem,
+        now: float,
+        isActive: bool,
+    ) -> None:
+        """Append a task row and any task output blocks."""
+
+        rows.append(self._row(depth, "🔧", task, now, isActive))
+        for output in task.outputs:
+            rows.append(
+                ProgressRow(
+                    depth=depth + 1,
+                    duration=0.0,
+                    icon="",
+                    name="",
+                    status="succeeded",
+                    output=output,
+                )
+            )
 
     def _finalizeRole(self, now: float) -> None:
         """Finalize the active role."""
@@ -370,6 +410,20 @@ class AnsibleProgressParser:
             self.currentRole.interactions.append(interaction)
             return
         self.currentPlay.interactions.append(interaction)
+
+    def recordTaskOutput(self, taskHeader: str, title: str, body: str) -> None:
+        """Record a human-friendly output block for a task.
+
+        Args:
+            body: Preformatted output body.
+            taskHeader: Ansible task header in optional ``role : task`` form.
+            title: Short block title.
+        """
+
+        targetTask = self._findTaskByHeader(taskHeader)
+        if targetTask is None:
+            return
+        targetTask.outputs.append(PrettyOutput(title=title, body=body))
 
     @staticmethod
     def _row(
@@ -471,6 +525,35 @@ class AnsibleProgressParser:
             and self._normalizeTaskHeader(self.currentTask.name)
             == self._normalizeTaskHeader(taskHeader)
         )
+
+    def _findTaskByHeader(self, taskHeader: str) -> ProgressItem | None:
+        """Return the active or completed task matching a task header."""
+
+        roleName = None
+        taskName = taskHeader
+        if " : " in taskHeader:
+            roleName, taskName = taskHeader.split(" : ", 1)
+        normalizedTaskName = self._normalizeTaskHeader(taskName)
+
+        if self._matchesCurrentTask(taskHeader):
+            return self.currentTask
+        if roleName is not None and self.currentRole is not None:
+            if self.currentRole.name == roleName:
+                for task in reversed(self.currentRole.tasks):
+                    if self._normalizeTaskHeader(task.name) == normalizedTaskName:
+                        return task
+        if roleName is None and self.currentPlay is not None:
+            for task in reversed(self.currentPlay.tasks):
+                if self._normalizeTaskHeader(task.name) == normalizedTaskName:
+                    return task
+        if self.currentPlay is not None:
+            for role in reversed(self.currentPlay.roles):
+                if roleName is not None and role.name != roleName:
+                    continue
+                for task in reversed(role.tasks):
+                    if self._normalizeTaskHeader(task.name) == normalizedTaskName:
+                        return task
+        return None
 
     @staticmethod
     def _normalizeTaskHeader(taskHeader: str) -> str:
