@@ -23,6 +23,7 @@ import re
 from types import SimpleNamespace
 from pathlib import Path
 from textwrap import dedent
+from time import monotonic
 from typing import Any
 
 import pytest
@@ -71,6 +72,22 @@ def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
     )
 
 
+def createRunScreen(projectRoot: Path) -> RunScreen:
+    """Create a run screen fixture for direct event processing tests."""
+
+    return RunScreen(
+        RuntimeDefaults.forProject(projectRoot),
+        entry=SimpleNamespace(
+            displayName="site",
+            path=projectRoot / "playbooks" / "site-pb.yaml",
+            title="site-pb.yaml",
+        ),
+        config=PlaybookConfig(node="web", outputLevel="task"),
+        argsDisplay="",
+        onBack=lambda: None,
+    )
+
+
 async def waitForRunComplete(pilot: Any, cycles: int = 100) -> None:
     """Wait for the run screen worker to finish.
 
@@ -96,6 +113,56 @@ async def waitForActivePrompt(pilot: Any, cycles: int = 100) -> None:
             return
         await pilot.pause(0.1)
     raise AssertionError("Run did not show an active prompt before test timeout.")
+
+
+def testTuiRunPanelProcessesCallbackTaskLifecycle(tmp_path: Path) -> None:
+    """Verify callback events can drive active task display and completion."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Bootstrap collections"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "name": "bootstrapCollections : install azure SDK pip requirements",
+                "role": "bootstrapCollections",
+            },
+        }
+    )
+
+    rows = runScreen.progressParser.rows(now=monotonic())
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Bootstrap collections", "running"),
+        ("⚙", "bootstrapCollections", "running"),
+        ("🔧", "install azure SDK pip requirements", "running"),
+    ]
+
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "name": "bootstrapCollections : install optional collection",
+                "role": "bootstrapCollections",
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_skipped", "result": {}})
+    rows = runScreen.progressParser.rows(now=monotonic())
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Bootstrap collections", "running"),
+        ("⚙", "bootstrapCollections", "running"),
+        ("🔧", "install azure SDK pip requirements", "succeeded"),
+    ]
 
 
 @pytest.mark.asyncio

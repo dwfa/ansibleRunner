@@ -471,7 +471,29 @@ class RunScreen(Container):
     def _processEventRecord(self, eventRecord: dict[str, object]) -> None:
         """Process one structured Ansible callback event."""
 
-        if eventRecord.get("event") != "task_start":
+        eventName = str(eventRecord.get("event") or "")
+        now = monotonic()
+        if eventName == "play_start":
+            play = eventRecord.get("play")
+            if isinstance(play, dict):
+                playName = str(play.get("name") or "").strip()
+                if playName:
+                    self.progressParser.processLine(
+                        f"PLAY [{playName}] ********",
+                        now,
+                    )
+            return
+        if eventName in {
+            "runner_ok",
+            "runner_failed",
+            "runner_unreachable",
+            "runner_skipped",
+        }:
+            resultState = self._resultStateFromEvent(eventName)
+            if resultState:
+                self.progressParser.processLine(f"{resultState}: [localhost]", now)
+            return
+        if eventName != "task_start":
             return
         task = eventRecord.get("task")
         if not isinstance(task, dict):
@@ -480,7 +502,7 @@ class RunScreen(Container):
         if taskHeader:
             self.progressParser.processLine(
                 f"TASK [{taskHeader}] ********",
-                monotonic(),
+                now,
             )
         path = str(task.get("path") or "")
         if path.endswith("waitForInput.yaml:36") or "/waitForInput.yaml:" in path:
@@ -504,6 +526,20 @@ class RunScreen(Container):
         if not roleName or " : " in taskName:
             return taskName
         return f"{roleName} : {taskName}"
+
+    @staticmethod
+    def _resultStateFromEvent(eventName: str) -> str:
+        """Return an Ansible result token for a callback result event."""
+
+        if eventName == "runner_ok":
+            return "ok"
+        if eventName == "runner_failed":
+            return "failed"
+        if eventName == "runner_unreachable":
+            return "unreachable"
+        if eventName == "runner_skipped":
+            return "skipping"
+        return ""
 
     def _startPromptFromEvent(
         self,
