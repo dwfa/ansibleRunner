@@ -476,6 +476,12 @@ class RunScreen(Container):
         task = eventRecord.get("task")
         if not isinstance(task, dict):
             return
+        taskHeader = self._taskHeaderFromEvent(task)
+        if taskHeader:
+            self.progressParser.processLine(
+                f"TASK [{taskHeader}] ********",
+                monotonic(),
+            )
         path = str(task.get("path") or "")
         if path.endswith("waitForInput.yaml:36") or "/waitForInput.yaml:" in path:
             self._startPromptFromEvent(task, "continue")
@@ -486,6 +492,18 @@ class RunScreen(Container):
             taskName = str(task.get("name") or "").lower()
             if "prompt for user input" in taskName:
                 self._startPromptFromEvent(task, "text")
+
+    @staticmethod
+    def _taskHeaderFromEvent(task: dict[str, object]) -> str:
+        """Return an Ansible task header from callback task metadata."""
+
+        taskName = str(task.get("name") or "").strip()
+        roleName = str(task.get("role") or "").strip()
+        if not taskName:
+            return ""
+        if not roleName or " : " in taskName:
+            return taskName
+        return f"{roleName} : {taskName}"
 
     def _startPromptFromEvent(
         self,

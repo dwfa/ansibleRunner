@@ -831,6 +831,40 @@ async def testTuiRunPanelStartsPromptFromCallbackEvent(
 
 
 @pytest.mark.asyncio
+async def testTuiRunPanelStartsProgressTaskFromCallbackEvent(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify callback task events show active work before stdout task output."""
+
+    _writeEventTaskFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.35)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runProgress = pilot.app.query_one("#run-progress", Static)
+        renderedProgress = _renderRich(runProgress.content)
+
+        assert "bootstrapCollections: import azure SDK" in renderedProgress
+        assert any(
+            row.name == "bootstrapCollections: import azure SDK"
+            and row.status == "running"
+            for row in runScreen.progressRows
+        )
+
+        await waitForRunComplete(pilot)
+
+
+@pytest.mark.asyncio
 async def testTuiRunPanelRendersBracketedPromptTextLiterally(
     tmp_path: Path,
     monkeypatch: Any,
@@ -1344,6 +1378,58 @@ def _writeEventPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
                     )
             print("PLAY [Callback prompt play] ********", flush=True)
             sys.stdin.readline()
+            print("ok: [localhost]", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeEventTaskFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook whose task starts in callback events first."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import json
+            import os
+            import sys
+            import time
+
+            print("PLAY [Bootstrap collections] ********", flush=True)
+            event_log_path = os.environ.get("ANSIBLE_RUNNER_EVENT_LOG")
+            if event_log_path:
+                with open(event_log_path, "a", encoding="utf-8") as event_log:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "task_start",
+                                "task": {
+                                    "action": "ansible.builtin.command",
+                                    "name": "bootstrapCollections: import azure SDK",
+                                    "path": "/tmp/tasks/bootstrapCollections.yaml:10",
+                                    "role": "bootstrapCollections",
+                                    "uuid": None,
+                                },
+                                "timestamp": "2026-08-04T19:41:46+00:00",
+                            },
+                            sort_keys=True,
+                        ),
+                        file=event_log,
+                        flush=True,
+                    )
+            time.sleep(0.6)
+            print(
+                "TASK [bootstrapCollections : bootstrapCollections: import azure SDK] ********",
+                flush=True,
+            )
             print("ok: [localhost]", flush=True)
             sys.exit(0)
             """

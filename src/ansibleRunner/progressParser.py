@@ -418,6 +418,8 @@ class AnsibleProgressParser:
 
         if self.currentPlay is None:
             return
+        if self._matchesCurrentTask(taskHeader):
+            return
         taskStartTime = (
             self.idleStartTime
             if useIdleStart and self.currentTask is None
@@ -447,6 +449,27 @@ class AnsibleProgressParser:
         return (
             self.currentTask is not None
             and self._normalizeTaskHeader(taskHeader) in self.syntheticTaskAliases
+        )
+
+    def _matchesCurrentTask(self, taskHeader: str) -> bool:
+        """Return whether a task header repeats the currently active task."""
+
+        if self.currentTask is None:
+            return False
+        if " : " in taskHeader:
+            roleName, taskName = taskHeader.split(" : ", 1)
+            currentRoleName = (
+                self.currentRole.name if self.currentRole is not None else None
+            )
+            return (
+                currentRoleName == roleName
+                and self._normalizeTaskHeader(self.currentTask.name)
+                == self._normalizeTaskHeader(taskName)
+            )
+        return (
+            self.currentRole is None
+            and self._normalizeTaskHeader(self.currentTask.name)
+            == self._normalizeTaskHeader(taskHeader)
         )
 
     @staticmethod

@@ -40,6 +40,25 @@ def testParserShowsActivePlayRoleAndTaskRows() -> None:
     assert rows[2].duration == 2.5
 
 
+def testParserIgnoresRepeatedActiveTaskHeader() -> None:
+    """Verify callback-first and stdout-later task headers do not duplicate."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("TASK [manageImage : Download image] *****", now=2.0)
+    parser.processLine("TASK [manageImage : Download image] *****", now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Build image", "running"),
+        ("⚙", "manageImage", "running"),
+        ("🔧", "Download image", "running"),
+    ]
+    assert rows[2].duration == 3.0
+
+
 def testParserFinalizesCompletedRoleTaskAndPlay() -> None:
     """Verify completed rows have succeeded status and durations."""
 
