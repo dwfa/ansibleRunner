@@ -3,7 +3,7 @@
 # GitHub bootstrap installer for ansibleRunner.
 #
 # USAGE:
-#   curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
+#   curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
 #   python3 install.py
 #
 # WORKFLOW:

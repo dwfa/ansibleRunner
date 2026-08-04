@@ -49,7 +49,7 @@ For a project-local install, download the Python installer from GitHub, inspect
 it if desired, then run it from the Ansible project root:
 
 ```shell
-curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
 python3 install.py
 ```
 
@@ -66,11 +66,11 @@ Start the TUI from the Ansible project root:
 Convenience forms:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py | python3 -
+curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py | python3 -
 ```
 
 ```shell
-python3 <(curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py)
+python3 <(curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py)
 ```
 
 If GitHub release downloads are blocked on the target machine, download both
@@ -78,7 +78,7 @@ release files on a machine that has access, copy them to the Ansible project
 root, then run the installer there:
 
 ```shell
-curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
 curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/ansiblerunner-1.0.1-py3-none-any.whl
 ```
 
