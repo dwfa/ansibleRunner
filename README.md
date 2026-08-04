@@ -53,13 +53,13 @@ curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py
 python3 install.py
 ```
 
-The installer creates `.venv`, installs `ansibleRunner` from GitHub, and writes
-`ansibleRunner.py` as a thin project launcher.
+The installer creates `.venv`, installs the `ansibleRunner` release wheel from
+GitHub, and writes `ar.py` as a thin project launcher.
 
 Start the TUI from the Ansible project root:
 
 ```shell
-./ansibleRunner.py
+./ar.py
 ```
 
 Convenience forms:
@@ -75,7 +75,7 @@ python3 <(curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0
 Install the package directly from GitHub:
 
 ```shell
-python3 -m pip install "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0"
+python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl"
 ```
 
 Install from a local checkout for testing:
@@ -92,7 +92,7 @@ python3 -m pip install -e ".[dev]"
 
 ## Project Layout
 
-`ansibleRunner` treats the directory containing `ansibleRunner.py` as the
+`ansibleRunner` treats the directory containing `ar.py` as the
 Ansible project root.
 
 Expected project files:
@@ -106,7 +106,7 @@ Expected project files:
 Files created by the installer:
 
 - `.venv/`: project-local Python virtual environment.
-- `ansibleRunner.py`: project-local launcher. This file knows the project root,
+- `ar.py`: project-local launcher. This file knows the project root,
   so normal project usage does not require `--project-root`.
 - `logs/ansibleRunner-install-<timestamp>.log`: installer details, including
   virtual environment and pip output.
@@ -127,7 +127,7 @@ their matching `.events.jsonl` files.
 Start the project launcher:
 
 ```shell
-./ansibleRunner.py
+./ar.py
 ```
 
 The first screen lists playbooks from `playbooks/`.

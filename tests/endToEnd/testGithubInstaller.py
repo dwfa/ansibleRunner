@@ -26,11 +26,23 @@ from pathlib import Path
 from typing import Any
 
 
-def testPackageSpecDefaultsToV1GitHubRef() -> None:
-    """Verify the installer defaults to the v1.0.0 GitHub package spec."""
+def testPackageSpecDefaultsToV1ReleaseWheel() -> None:
+    """Verify the installer defaults to the v1.0.0 release wheel."""
 
     installer = _loadInstallerModule()
     args = installer.parseArgs([])
+
+    assert installer.getPackageSpec(args) == (
+        "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
+        "v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl"
+    )
+
+
+def testPackageSpecCanInstallFromGit() -> None:
+    """Verify the installer can still install from Git for development."""
+
+    installer = _loadInstallerModule()
+    args = installer.parseArgs(["--install-from-git"])
 
     assert installer.getPackageSpec(args) == (
         "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0"
@@ -113,7 +125,8 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
 
     installer.installPackage(
         Path("/project/.venv/bin/python"),
-        "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0",
+        "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
+        "v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl",
         tmp_path / "logs" / "install.log",
     )
 
@@ -125,7 +138,8 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
             "install",
             "--upgrade",
             "--disable-pip-version-check",
-            "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.0",
+            "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
+            "v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl",
         ]
     ]
 
@@ -146,14 +160,13 @@ def testWriteLauncherRunsInstalledPackage(tmp_path: Path) -> None:
     """Verify the generated launcher delegates to the installed package."""
 
     installer = _loadInstallerModule()
-    launcherPath = tmp_path / "ansibleRunner.py"
+    launcherPath = tmp_path / "ar.py"
 
     installer.writeLauncher(launcherPath, tmp_path / ".venv")
 
     launcherText = launcherPath.read_text(encoding="utf-8")
     assert "PROJECT_ROOT / '.venv'" in launcherText
-    assert '"-m",' in launcherText
-    assert '"ansibleRunner",' in launcherText
+    assert 'RUNNER = VENV_DIR / "bin" / "ansibleRunner"' in launcherText
     assert '"--project-root",' in launcherText
     assert os.access(launcherPath, os.X_OK)
     assert launcherPath.stat().st_mode & stat.S_IXUSR

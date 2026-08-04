@@ -29,20 +29,29 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 
 PACKAGE_NAME = "ansibleRunner"
+DEFAULT_VERSION = "1.0.0"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
-DEFAULT_REF = "v1.0.0"
-DEFAULT_LAUNCHER_NAME = "ansibleRunner.py"
+DEFAULT_REF = f"v{DEFAULT_VERSION}"
+DEFAULT_WHEEL_URL = (
+    "https://github.com/dwfa/ansibleRunner/releases/download/"
+    f"{DEFAULT_REF}/ansiblerunner-{DEFAULT_VERSION}-py3-none-any.whl"
+)
+DEFAULT_LAUNCHER_NAME = "ar.py"
 GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
 RESET_COLOUR = "\033[0m"
 SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
 
 
 @dataclass
@@ -56,6 +65,10 @@ class InstallerUi:
     logPath: Path
     activeStep: str | None = None
     activeStepHadSubsteps: bool = False
+    activeStepPrinted: bool = False
+    cursorHidden: bool = False
+    spinnerEvent: threading.Event = field(default_factory=threading.Event)
+    spinnerThread: threading.Thread | None = None
 
     def header(self, projectRoot: Path, venvDir: Path) -> None:
         """Print the installer header panel.
@@ -97,7 +110,18 @@ class InstallerUi:
 
         self.activeStep = title
         self.activeStepHadSubsteps = False
-        print(self._stepLine(title, "•"), flush=True)
+        self.activeStepPrinted = False
+        if sys.stdout.isatty():
+            self.hideCursor()
+            self.spinnerEvent = threading.Event()
+            self.spinnerThread = threading.Thread(
+                target=self._renderSpinner,
+                daemon=True,
+            )
+            self.spinnerThread.start()
+        else:
+            print(self._stepLine(title, "•"), flush=True)
+            self.activeStepPrinted = True
 
     def finishStep(self, success: bool = True) -> None:
         """Print completion status for the active step.
@@ -108,11 +132,17 @@ class InstallerUi:
 
         if self.activeStep is None:
             return
-        if not self.activeStepHadSubsteps:
-            marker = self._green("✅") if success else "❌"
-            self.substep(marker)
+        title = self.activeStep
+        self._stopSpinner()
+        marker = self._green("✅") if success else "❌"
+        if sys.stdout.isatty():
+            self._printTtyStatusLine(title, "", marker)
+            print(flush=True)
+        elif not self.activeStepPrinted:
+            print(self._stepLine(title, "•", marker), flush=True)
         self.activeStep = None
         self.activeStepHadSubsteps = False
+        self.activeStepPrinted = False
 
     def substep(self, message: str) -> None:
         """Print an indented detail line.
@@ -146,6 +176,26 @@ class InstallerUi:
 
         print(self._stepLine(message, " ", "❌"), flush=True)
         self.substep(f"See log: {self.logPath}")
+
+    def hideCursor(self) -> None:
+        """Hide the terminal cursor while animated status output is active."""
+
+        if sys.stdout.isatty() and not self.cursorHidden:
+            print(HIDE_CURSOR, end="", flush=True)
+            self.cursorHidden = True
+
+    def showCursor(self) -> None:
+        """Restore the terminal cursor after animated status output finishes."""
+
+        if sys.stdout.isatty() and self.cursorHidden:
+            print(SHOW_CURSOR, end="", flush=True)
+            self.cursorHidden = False
+
+    def cleanup(self) -> None:
+        """Stop active animation and restore terminal state."""
+
+        self._stopSpinner()
+        self.showCursor()
 
     def _colour(self, text: str) -> str:
         """Apply panel colour when stdout is a terminal."""
@@ -232,6 +282,43 @@ class InstallerUi:
         right = self._colour("│")
         return f"{self._leftPadding(width)}{left} {self._padRight(content, innerWidth)} {right}"
 
+    def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
+        """Print one status line with a fixed right-side suffix column."""
+
+        width = self._panelWidth()
+        leftPadding = len(self._leftPadding(width))
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        suffixColumn = leftPadding + width - suffixWidth + 1
+        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
+        if suffix:
+            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
+
+    def _renderSpinner(self) -> None:
+        """Render an active step spinner until the step completes."""
+
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        frameIndex = 0
+        while not self.spinnerEvent.is_set():
+            if self.activeStep is not None:
+                self._printTtyStatusLine(
+                    self.activeStep,
+                    "",
+                    frames[frameIndex],
+                )
+            frameIndex = (frameIndex + 1) % len(frames)
+            time.sleep(0.1)
+
+    def _stopSpinner(self) -> None:
+        """Stop and join the active spinner thread."""
+
+        self.spinnerEvent.set()
+        if self.spinnerThread is not None:
+            self.spinnerThread.join(timeout=1)
+            self.spinnerThread = None
+
     def _stepLine(self, title: str, prefix: str, suffix: str = "") -> str:
         """Format an installer step line."""
 
@@ -268,21 +355,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ui.step("🧰 Prepare virtual environment")
         venvCreated = ensureVenv(venvDir, args.python, logPath, args.verbose)
+        ui.finishStep()
         if venvCreated:
             ui.substep(f"Created {venvDir} ✅")
         else:
             ui.substep(f"Using existing {venvDir} ✅")
-        ui.finishStep()
 
         ui.step("📦 Install ansibleRunner")
         installPackage(venvPython, packageSpec, logPath, args.verbose)
-        ui.substep(f"Installed {PACKAGE_NAME} ✅")
         ui.finishStep()
+        ui.substep(f"Installed {PACKAGE_NAME} ✅")
 
         ui.step("📝 Write project launcher")
         writeLauncher(launcherPath, venvDir)
-        ui.substep(f"Wrote {launcherPath} ✅")
         ui.finishStep()
+        ui.substep(f"Wrote {launcherPath} ✅")
+        staleLauncherPath = projectRoot / "ansibleRunner.py"
+        if launcherPath.name != "ansibleRunner.py" and staleLauncherPath.exists():
+            ui.substep(f"Remove old launcher to avoid recursion: {staleLauncherPath}")
     except SystemExit:
         ui.finishStep(False)
         ui.failure("Install failed")
@@ -291,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
         ui.finishStep(False)
         ui.failure(f"Install failed: {exc}")
         raise
+    finally:
+        ui.cleanup()
 
     ui.success(launcherPath)
     return 0
@@ -332,12 +424,25 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         "--repo-url",
         dest="repoUrl",
         default=os.environ.get("ANSIBLE_RUNNER_REPO_URL", DEFAULT_REPO_URL),
-        help="Git repository URL used when --package-spec is not set.",
+        help="Git repository URL used with --install-from-git.",
     )
     parser.add_argument(
         "--ref",
         default=os.environ.get("ANSIBLE_RUNNER_REF", DEFAULT_REF),
-        help="Git ref used when --package-spec is not set.",
+        help="Git ref used with --install-from-git.",
+    )
+    parser.add_argument(
+        "--wheel-url",
+        dest="wheelUrl",
+        default=os.environ.get("ANSIBLE_RUNNER_WHEEL_URL", DEFAULT_WHEEL_URL),
+        help="Release wheel URL used when --package-spec is not set.",
+    )
+    parser.add_argument(
+        "--install-from-git",
+        dest="installFromGit",
+        action="store_true",
+        default=os.environ.get("ANSIBLE_RUNNER_INSTALL_FROM_GIT") == "1",
+        help="Install from the Git repository instead of the release wheel.",
     )
     parser.add_argument(
         "--package-spec",
@@ -372,6 +477,8 @@ def getPackageSpec(args: argparse.Namespace) -> str:
 
     if args.packageSpec:
         return str(args.packageSpec)
+    if not args.installFromGit:
+        return f"{PACKAGE_NAME} @ {args.wheelUrl}"
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
 
 
@@ -544,19 +651,17 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 VENV_DIR = {venvExpression}
 if os.name == "nt":
-    VENV_PYTHON = VENV_DIR / "Scripts" / "python.exe"
+    RUNNER = VENV_DIR / "Scripts" / "ansibleRunner.exe"
 else:
-    VENV_PYTHON = VENV_DIR / "bin" / "python"
+    RUNNER = VENV_DIR / "bin" / "ansibleRunner"
 
 command = [
-    str(VENV_PYTHON),
-    "-m",
-    "ansibleRunner",
+    str(RUNNER),
     "--project-root",
     str(PROJECT_ROOT),
     *sys.argv[1:],
 ]
-raise SystemExit(subprocess.run(command, check=False).returncode)
+raise SystemExit(subprocess.run(command, check=False, cwd=PROJECT_ROOT).returncode)
 """
 
 
