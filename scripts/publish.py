@@ -49,14 +49,24 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
+import threading
+import time
 import tomllib
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 PROJECT_NAME = "ansibleRunner"
 RELEASE_REMOTE = "origin"
 TAG_PREFIX = "v"
+GREEN_COLOUR = "\033[38;5;46m"
+MAUVE_COLOUR = "\033[38;5;213m"
+RESET_COLOUR = "\033[0m"
+SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,277 @@ class PublishContext:
     projectRoot: Path
     tagName: str
     version: str
+
+
+@dataclass
+class PublishUi:
+    """Terminal output helper for release publishing.
+
+    Args:
+        dryRun: Whether the publish is only previewing commands.
+        spinner: Whether to animate active steps.
+    """
+
+    dryRun: bool = False
+    spinner: bool = True
+    activeStep: str | None = None
+    bodyLineCount: int = 0
+    cursorHidden: bool = False
+    panelLineCount: int = 0
+    spinnerEvent: threading.Event = field(default_factory=threading.Event)
+    spinnerThread: threading.Thread | None = None
+
+    def header(self, projectRoot: Path, version: str) -> None:
+        """Print the centered publish header panel."""
+
+        lines = self._headerLines(projectRoot, version)
+        self.panelLineCount = len(lines)
+        self.bodyLineCount = 0
+        print("\n".join(lines), flush=True)
+
+    def step(self, title: str) -> None:
+        """Start a publish step."""
+
+        self.finishStep()
+        self.activeStep = title
+        self.spinnerEvent = threading.Event()
+        if self.spinner and sys.stdout.isatty():
+            self.spinnerThread = threading.Thread(
+                target=self._renderSpinner,
+                daemon=True,
+            )
+            self.spinnerThread.start()
+        elif not sys.stdout.isatty():
+            print(self._stepLine(title, "•"), flush=True)
+            self.bodyLineCount += 1
+
+    def finishStep(self, success: bool = True) -> None:
+        """Stop the active step and render its final marker."""
+
+        if self.activeStep is None:
+            return
+
+        title = self.activeStep
+        self._stopSpinner()
+        suffix = self._green("✅") if success else "❌"
+        if sys.stdout.isatty():
+            self._printTtyStatusLine(title, "", suffix)
+            print(flush=True)
+            self.bodyLineCount += 1
+
+        self.activeStep = None
+
+    def substep(self, detail: str) -> None:
+        """Print a secondary detail line."""
+
+        line = f"{self._leftPadding(self._panelWidth())}      ╰─ {detail}"
+        print(self._subtleWhite(line), flush=True)
+        self.bodyLineCount += 1
+
+    def success(self, message: str) -> None:
+        """Print a completed publish message."""
+
+        self.finishStep()
+        completedMessage = f"🎉 {message}"
+        if sys.stdout.isatty():
+            self._printTtyStatusLine(completedMessage, "", self._green("✅"))
+            print(flush=True)
+            self.bodyLineCount += 1
+            return
+        print(self._stepLine(completedMessage, "", self._green("✅")), flush=True)
+        self.bodyLineCount += 1
+
+    def failure(self, message: str) -> None:
+        """Print a failed publish message."""
+
+        self.finishStep(False)
+        if sys.stdout.isatty():
+            self._printTtyStatusLine(message, "", "❌")
+            print(flush=True)
+            self.bodyLineCount += 1
+            return
+        print(self._stepLine(message, "", "❌"), flush=True)
+        self.bodyLineCount += 1
+
+    def hideCursor(self) -> None:
+        """Hide the terminal cursor while animated status output is active."""
+
+        if sys.stdout.isatty() and not self.cursorHidden:
+            print(HIDE_CURSOR, end="", flush=True)
+            self.cursorHidden = True
+
+    def showCursor(self) -> None:
+        """Restore the terminal cursor."""
+
+        if sys.stdout.isatty() and self.cursorHidden:
+            print(SHOW_CURSOR, end="", flush=True)
+            self.cursorHidden = False
+
+    def cleanup(self) -> None:
+        """Stop active animation and restore terminal state."""
+
+        self._stopSpinner()
+        self.showCursor()
+
+    def _headerLines(self, projectRoot: Path, version: str) -> list[str]:
+        """Build centered header panel lines."""
+
+        width = self._panelWidth()
+        innerWidth = width - 4
+        top = self._colour("╭" + ("─" * (width - 2)) + "╮")
+        bottom = self._colour("╰" + ("─" * (width - 2)) + "╯")
+        modeText = "dry run" if self.dryRun else "publish"
+        title = f"🚀 {PROJECT_NAME} Release ({version}, {modeText})"
+        projectText = f"Project: {projectRoot}"
+        tagText = f"Tag: {TAG_PREFIX}{version}"
+        lines = [
+            f"{self._leftPadding(width)}{top}",
+            self._panelLine(self._truncateRight(title, innerWidth), width),
+            self._panelLine("", width),
+        ]
+        for detail in (projectText, tagText):
+            wrappedLines = textwrap.wrap(detail, width=innerWidth) or [detail]
+            lines.extend(self._panelLine(line, width) for line in wrappedLines)
+        lines.append(f"{self._leftPadding(width)}{bottom}")
+        return lines
+
+    def _colour(self, text: str) -> str:
+        """Apply panel colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{MAUVE_COLOUR}{text}{RESET_COLOUR}"
+
+    def _green(self, text: str) -> str:
+        """Apply success colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{GREEN_COLOUR}{text}{RESET_COLOUR}"
+
+    def _subtleWhite(self, text: str) -> str:
+        """Apply secondary text colour when stdout is a terminal."""
+
+        if not sys.stdout.isatty():
+            return text
+        return f"{SUBTLE_WHITE_COLOUR}{text}{RESET_COLOUR}"
+
+    def _displayWidth(self, text: str) -> int:
+        """Calculate approximate terminal display width."""
+
+        width = 0
+        for character in text:
+            codepoint = ord(character)
+            if unicodedata.combining(character):
+                continue
+            if codepoint in {0xFE0E, 0xFE0F}:
+                continue
+            if (
+                0x1F000 <= codepoint <= 0x1FAFF
+                or 0x2600 <= codepoint <= 0x27BF
+                or unicodedata.east_asian_width(character) in {"F", "W"}
+            ):
+                width += 2
+            else:
+                width += 1
+        return width
+
+    def _padRight(self, text: str, width: int) -> str:
+        """Pad text to a target terminal display width."""
+
+        return text + (" " * max(0, width - self._displayWidth(text)))
+
+    def _truncateRight(self, text: str, width: int) -> str:
+        """Truncate text to a target terminal display width."""
+
+        if self._displayWidth(text) <= width:
+            return text
+        if width <= 1:
+            return "…"[:width]
+
+        output = ""
+        currentWidth = 0
+        targetWidth = width - 1
+        for character in text:
+            characterWidth = self._displayWidth(character)
+            if currentWidth + characterWidth > targetWidth:
+                break
+            output += character
+            currentWidth += characterWidth
+        return output + "…"
+
+    def _panelWidth(self) -> int:
+        """Calculate a centered panel width from the current terminal."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return max(50, min(columns, int(columns * 0.95)))
+
+    def _leftPadding(self, width: int) -> str:
+        """Calculate left padding for a centered block."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return " " * max(0, (columns - width) // 2)
+
+    def _leftPaddingWidth(self, width: int) -> int:
+        """Calculate left padding width for a centered block."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return max(0, (columns - width) // 2)
+
+    def _panelLine(self, content: str, width: int) -> str:
+        """Format a content line for the header panel."""
+
+        innerWidth = width - 4
+        left = self._colour("│")
+        right = self._colour("│")
+        return f"{self._leftPadding(width)}{left} {self._padRight(content, innerWidth)} {right}"
+
+    def _stepLine(self, title: str, prefix: str, suffix: str = "") -> str:
+        """Format a publish step line."""
+
+        width = self._panelWidth()
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        return f"{self._leftPadding(width)}{self._padRight(fittedLeft, availableWidth)}{suffix}"
+
+    def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
+        """Print a status line with suffix placed at a fixed terminal column."""
+
+        width = self._panelWidth()
+        leftPadding = self._leftPaddingWidth(width)
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        suffixColumn = leftPadding + width - suffixWidth + 1
+        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
+        if suffix:
+            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
+
+    def _renderSpinner(self) -> None:
+        """Render the active step spinner until the step completes."""
+
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        frameIndex = 0
+        while not self.spinnerEvent.is_set():
+            if self.activeStep is not None:
+                self._printTtyStatusLine(
+                    self.activeStep,
+                    "",
+                    frames[frameIndex],
+                )
+            frameIndex = (frameIndex + 1) % len(frames)
+            time.sleep(0.1)
+
+    def _stopSpinner(self) -> None:
+        """Stop and join the active spinner thread."""
+
+        self.spinnerEvent.set()
+        if self.spinnerThread is not None:
+            self.spinnerThread.join(timeout=1)
+            self.spinnerThread = None
 
 
 def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
@@ -675,16 +956,26 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parseArgs(argv)
     projectRoot = Path(__file__).resolve().parent.parent
+    ui = PublishUi(dryRun=args.dry_run)
 
     try:
         requireProjectRoot(projectRoot)
-        requireTool("git")
-        requireTool("gh")
         version = readProjectVersion(projectRoot)
         tagName = f"{TAG_PREFIX}{version}"
+        ui.header(projectRoot, version)
+        ui.hideCursor()
+
+        ui.step("🔎 Validate release inputs")
+        requireProjectRoot(projectRoot)
+        requireTool("git")
+        requireTool("gh")
         requireCleanWorktree(projectRoot)
         branchName = getCurrentBranch(projectRoot)
         upstreamBranch = getUpstreamBranch(projectRoot)
+        ui.substep(f"Version: {version}")
+        ui.substep(f"Branch: {branchName}")
+        ui.substep(f"Upstream: {upstreamBranch}")
+        ui.finishStep()
 
         context = PublishContext(
             dryRun=args.dry_run,
@@ -693,31 +984,55 @@ def main(argv: list[str] | None = None) -> int:
             version=version,
         )
 
-        print(f"Publishing {PROJECT_NAME} {version}")
+        ui.step("🔁 Verify branch sync")
         if args.push_branch:
+            ui.substep(f"Pushing branch: {branchName}")
             pushCurrentBranch(context, branchName)
             if not args.dry_run:
                 requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
         else:
             requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
+            ui.substep("Branch already synced.")
+        ui.finishStep()
+
+        ui.step("🏷️  Validate release tag")
         if args.reuse_tag:
             requireExistingTagAtHead(projectRoot, tagName)
+            ui.substep(f"Reusing existing tag: {tagName}")
         elif not args.replace_tag:
             requireTagAvailable(projectRoot, tagName)
             requireGhReleaseAvailable(projectRoot, tagName)
+            ui.substep(f"Tag is available: {tagName}")
+        else:
+            ui.substep(f"Replacing existing tag: {tagName}")
+        ui.finishStep()
+
+        ui.step("🏗️  Build release wheel")
         wheelPath = buildWheel(context, args.skip_build)
-        print(f"Wheel: {wheelPath}")
+        ui.substep(f"Wheel: {wheelPath}")
+        ui.finishStep()
+
+        ui.step("🚢 Publish release assets")
         publishRelease(
             context,
             wheelPath,
             reuseTag=args.reuse_tag,
             replaceTag=args.replace_tag,
         )
-        print(f"Published {PROJECT_NAME} {tagName}")
+        ui.substep(f"Release: {tagName}")
+        ui.substep("Assets: install.py, wheel")
+        ui.finishStep()
+        ui.success(f"Published {PROJECT_NAME} {tagName}")
         return 0
+    except SystemExit as exc:
+        if exc.code not in {0, None}:
+            ui.failure("Publish failed")
+        raise
     except KeyboardInterrupt:
-        print("Publish interrupted.", file=sys.stderr)
+        ui.failure("Publish interrupted")
         return 130
+    finally:
+        ui.cleanup()
 
 
 if __name__ == "__main__":
