@@ -90,22 +90,26 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         description="Build and publish an ansibleRunner GitHub release.",
     )
     parser.add_argument(
+        "-dr",
         "--dry-run",
         action="store_true",
         help="Print release steps without changing git or GitHub.",
     )
     parser.add_argument(
+        "-sb",
         "--skip-build",
         action="store_true",
         help="Use an existing dist wheel instead of running scripts/build.py.",
     )
     parser.add_argument(
+        "-pb",
         "--push-branch",
         action="store_true",
         help="Push the current branch to origin before tagging the release.",
     )
     tagMode = parser.add_mutually_exclusive_group()
     tagMode.add_argument(
+        "-ut",
         "--reuse-tag",
         action="store_true",
         help=(
@@ -114,6 +118,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     tagMode.add_argument(
+        "-rt",
         "--replace-tag",
         action="store_true",
         help=(

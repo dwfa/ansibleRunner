@@ -47,6 +47,20 @@ def testReadProjectVersionUsesPyprojectMetadata(tmp_path: Path) -> None:
     assert publish.readProjectVersion(tmp_path) == "1.2.3"
 
 
+def testParseArgsSupportsShortMaintainerFlags() -> None:
+    """Verify publish.py supports compact maintainer flag aliases."""
+
+    publish = _loadPublishModule()
+
+    args = publish.parseArgs(["-dr", "-sb", "-pb", "-ut"])
+
+    assert args.dry_run is True
+    assert args.skip_build is True
+    assert args.push_branch is True
+    assert args.reuse_tag is True
+    assert args.replace_tag is False
+
+
 def testRequireCleanWorktreeRejectsDirtyStatus(
     monkeypatch: Any,
     tmp_path: Path,
