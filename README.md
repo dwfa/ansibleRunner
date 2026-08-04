@@ -72,6 +72,28 @@ curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.p
 python3 <(curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py)
 ```
 
+If GitHub release downloads are blocked on the target machine, download both
+release files on a machine that has access, copy them to the Ansible project
+root, then run the installer there:
+
+```shell
+curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl
+```
+
+```shell
+python3 install.py
+```
+
+When `ansiblerunner-1.0.0-py3-none-any.whl` is beside `install.py`, the
+installer uses that local wheel instead of downloading it from GitHub.
+
+You can also point the installer at a specific local wheel:
+
+```shell
+python3 install.py --package-spec ./ansiblerunner-1.0.0-py3-none-any.whl
+```
+
 Install the package directly from GitHub:
 
 ```shell

@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from types import SimpleNamespace
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -244,6 +245,36 @@ async def testTuiRunPanelPausesAutoScrollWhenUserLeavesBottom(
 
         assert not runScreen.followProgress
         assert scrollCalls == []
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelMouseScrollHitTestUsesTextualPoint(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify mouse scroll hit testing matches Textual's point API."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runProgressScroll = pilot.app.query_one("#run-progress-scroll", VerticalScroll)
+        event = SimpleNamespace(
+            screen_x=runProgressScroll.region.x,
+            screen_y=runProgressScroll.region.y,
+        )
+
+        assert runScreen._eventInProgressScroll(event)
 
 
 @pytest.mark.asyncio

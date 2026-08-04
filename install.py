@@ -45,6 +45,7 @@ DEFAULT_WHEEL_URL = (
     "https://github.com/dwfa/ansibleRunner/releases/download/"
     f"{DEFAULT_REF}/ansiblerunner-{DEFAULT_VERSION}-py3-none-any.whl"
 )
+DEFAULT_WHEEL_NAME = f"ansiblerunner-{DEFAULT_VERSION}-py3-none-any.whl"
 DEFAULT_LAUNCHER_NAME = "ar.py"
 GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
@@ -345,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     venvDir = args.venvDir.expanduser()
     if not venvDir.is_absolute():
         venvDir = projectRoot / venvDir
-    packageSpec = getPackageSpec(args)
+    packageSpec = getPackageSpec(args, projectRoot)
     launcherPath = projectRoot / args.launcherName
     logPath = getInstallLogPath(projectRoot)
     venvPython = getVenvPython(venvDir)
@@ -465,11 +466,12 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def getPackageSpec(args: argparse.Namespace) -> str:
+def getPackageSpec(args: argparse.Namespace, projectRoot: Path | None = None) -> str:
     """Return the pip package spec for ansibleRunner.
 
     Args:
         args: Parsed installer arguments.
+        projectRoot: Optional project root for local wheel discovery.
 
     Returns:
         PEP 508 direct reference package spec.
@@ -478,6 +480,10 @@ def getPackageSpec(args: argparse.Namespace) -> str:
     if args.packageSpec:
         return str(args.packageSpec)
     if not args.installFromGit:
+        if projectRoot is not None:
+            localWheel = projectRoot / DEFAULT_WHEEL_NAME
+            if localWheel.is_file():
+                return str(localWheel)
         return f"{PACKAGE_NAME} @ {args.wheelUrl}"
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
 

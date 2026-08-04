@@ -38,6 +38,17 @@ def testPackageSpecDefaultsToV1ReleaseWheel() -> None:
     )
 
 
+def testPackageSpecPrefersProjectLocalWheel(tmp_path: Path) -> None:
+    """Verify a manually downloaded release wheel is used when present."""
+
+    installer = _loadInstallerModule()
+    wheelPath = tmp_path / "ansiblerunner-1.0.0-py3-none-any.whl"
+    wheelPath.write_text("wheel\n", encoding="utf-8")
+    args = installer.parseArgs([])
+
+    assert installer.getPackageSpec(args, tmp_path) == str(wheelPath)
+
+
 def testPackageSpecCanInstallFromGit() -> None:
     """Verify the installer can still install from Git for development."""
 

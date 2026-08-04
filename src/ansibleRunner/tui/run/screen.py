@@ -633,8 +633,7 @@ class RunScreen(Container):
             return False
         progressScroll = self.query_one("#run-progress-scroll", VerticalScroll)
         return progressScroll.region.contains_point(
-            int(event.screen_x),
-            int(event.screen_y),
+            (int(event.screen_x), int(event.screen_y))
         )
 
     def _scrollProgressToEnd(self) -> None:
