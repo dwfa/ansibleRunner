@@ -104,6 +104,23 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Push the current branch to origin before tagging the release.",
     )
+    tagMode = parser.add_mutually_exclusive_group()
+    tagMode.add_argument(
+        "--reuse-tag",
+        action="store_true",
+        help=(
+            "Reuse an existing local/remote tag that already points at HEAD, "
+            "and clobber release assets."
+        ),
+    )
+    tagMode.add_argument(
+        "--replace-tag",
+        action="store_true",
+        help=(
+            "Move an existing local/remote tag to HEAD, force-push it, and "
+            "clobber release assets."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -388,6 +405,92 @@ def requireTagAvailable(projectRoot: Path, tagName: str) -> None:
         raise SystemExit(f"Cannot publish because remote tag already exists: {tagName}")
 
 
+def revParse(projectRoot: Path, ref: str) -> str:
+    """Resolve a git ref to an object id.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+        ref: Git ref expression to resolve.
+
+    Returns:
+        Resolved object id.
+    """
+
+    return runCommand(["git", "rev-parse", ref], projectRoot).stdout.strip()
+
+
+def remoteTagObject(projectRoot: Path, tagName: str) -> str:
+    """Return the remote tag target object id when it exists.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+        tagName: Tag to resolve on the release remote.
+
+    Returns:
+        Remote tag target object id, or an empty string when missing.
+    """
+
+    peeledResult = runCommand(
+        ["git", "ls-remote", "--tags", RELEASE_REMOTE, f"{tagName}^{{}}"],
+        projectRoot,
+    )
+    if peeledResult.stdout.strip():
+        return peeledResult.stdout.split()[0]
+
+    tagResult = runCommand(
+        ["git", "ls-remote", "--tags", RELEASE_REMOTE, tagName],
+        projectRoot,
+    )
+    if tagResult.stdout.strip():
+        return tagResult.stdout.split()[0]
+    return ""
+
+
+def requireExistingTagAtHead(projectRoot: Path, tagName: str) -> None:
+    """Require existing local and remote tags to point at HEAD.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+        tagName: Tag expected to point at HEAD.
+
+    Raises:
+        SystemExit: When either tag is missing or points elsewhere.
+    """
+
+    head = revParse(projectRoot, "HEAD")
+    localTag = revParse(projectRoot, f"{tagName}^{{}}")
+    if localTag != head:
+        raise SystemExit(
+            f"Cannot reuse {tagName} because the local tag does not point at HEAD. "
+            "Use --replace-tag to move it."
+        )
+
+    remoteTag = remoteTagObject(projectRoot, tagName)
+    if not remoteTag:
+        raise SystemExit(
+            f"Cannot reuse {tagName} because the remote tag does not exist. "
+            "Run without --reuse-tag to create it."
+        )
+    if remoteTag != head:
+        raise SystemExit(
+            f"Cannot reuse {tagName} because the remote tag does not point at HEAD. "
+            "Use --replace-tag to move it."
+        )
+
+
+def ghReleaseExists(projectRoot: Path, tagName: str) -> bool:
+    """Return whether a GitHub release already exists for a tag."""
+
+    result = subprocess.run(
+        ["gh", "release", "view", tagName],
+        capture_output=True,
+        check=False,
+        cwd=projectRoot,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def requireGhReleaseAvailable(projectRoot: Path, tagName: str) -> None:
     """Require that a GitHub release does not already exist.
 
@@ -399,14 +502,7 @@ def requireGhReleaseAvailable(projectRoot: Path, tagName: str) -> None:
         SystemExit: When the release exists or gh fails unexpectedly.
     """
 
-    result = subprocess.run(
-        ["gh", "release", "view", tagName],
-        capture_output=True,
-        check=False,
-        cwd=projectRoot,
-        text=True,
-    )
-    if result.returncode == 0:
+    if ghReleaseExists(projectRoot, tagName):
         raise SystemExit(f"Cannot publish because GitHub release already exists: {tagName}")
 
 
@@ -473,38 +569,84 @@ def buildWheel(context: PublishContext, skipBuild: bool) -> Path:
     return requireWheel(context.projectRoot, context.version)
 
 
-def publishRelease(context: PublishContext, wheelPath: Path) -> None:
+def publishRelease(
+    context: PublishContext,
+    wheelPath: Path,
+    reuseTag: bool = False,
+    replaceTag: bool = False,
+) -> None:
     """Publish the git tag and GitHub release.
 
     Args:
         context: Publish context.
         wheelPath: Wheel asset to attach to the release.
+        reuseTag: Whether an existing HEAD tag should be reused.
+        replaceTag: Whether an existing tag should be moved to HEAD.
     """
 
     releaseNotes = (
         f"## {PROJECT_NAME} {context.version}\n\n"
         "Release generated by scripts/publish.py.\n"
     )
-    runCommand(
-        ["git", "tag", "-a", context.tagName, "-m", f"Release {context.version}"],
-        context.projectRoot,
-        dryRun=context.dryRun,
-        mutates=True,
-    )
-    runCommand(
-        ["git", "push", RELEASE_REMOTE, context.tagName],
-        context.projectRoot,
-        dryRun=context.dryRun,
-        mutates=True,
-    )
+    if replaceTag:
+        runCommand(
+            [
+                "git",
+                "tag",
+                "-f",
+                "-a",
+                context.tagName,
+                "-m",
+                f"Release {context.version}",
+            ],
+            context.projectRoot,
+            dryRun=context.dryRun,
+            mutates=True,
+        )
+        runCommand(
+            ["git", "push", "--force", RELEASE_REMOTE, context.tagName],
+            context.projectRoot,
+            dryRun=context.dryRun,
+            mutates=True,
+        )
+    elif not reuseTag:
+        runCommand(
+            ["git", "tag", "-a", context.tagName, "-m", f"Release {context.version}"],
+            context.projectRoot,
+            dryRun=context.dryRun,
+            mutates=True,
+        )
+        runCommand(
+            ["git", "push", RELEASE_REMOTE, context.tagName],
+            context.projectRoot,
+            dryRun=context.dryRun,
+            mutates=True,
+        )
+
+    assets = [str(context.projectRoot / "install.py"), str(wheelPath)]
+    if ghReleaseExists(context.projectRoot, context.tagName):
+        runCommand(
+            [
+                "gh",
+                "release",
+                "upload",
+                context.tagName,
+                *assets,
+                "--clobber",
+            ],
+            context.projectRoot,
+            dryRun=context.dryRun,
+            mutates=True,
+        )
+        return
+
     runCommand(
         [
             "gh",
             "release",
             "create",
             context.tagName,
-            str(context.projectRoot / "install.py"),
-            str(wheelPath),
+            *assets,
             "--title",
             f"{PROJECT_NAME} {context.tagName}",
             "--notes",
@@ -553,11 +695,19 @@ def main(argv: list[str] | None = None) -> int:
                 requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
         else:
             requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
-        requireTagAvailable(projectRoot, tagName)
-        requireGhReleaseAvailable(projectRoot, tagName)
+        if args.reuse_tag:
+            requireExistingTagAtHead(projectRoot, tagName)
+        elif not args.replace_tag:
+            requireTagAvailable(projectRoot, tagName)
+            requireGhReleaseAvailable(projectRoot, tagName)
         wheelPath = buildWheel(context, args.skip_build)
         print(f"Wheel: {wheelPath}")
-        publishRelease(context, wheelPath)
+        publishRelease(
+            context,
+            wheelPath,
+            reuseTag=args.reuse_tag,
+            replaceTag=args.replace_tag,
+        )
         print(f"Published {PROJECT_NAME} {tagName}")
         return 0
     except KeyboardInterrupt:
