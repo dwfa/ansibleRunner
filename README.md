@@ -49,12 +49,13 @@ For a project-local install, download the Python installer from GitHub, inspect
 it if desired, then run it from the Ansible project root:
 
 ```shell
-curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py
+curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
 python3 install.py
 ```
 
 The installer creates `.venv`, installs the `ansibleRunner` release wheel from
-GitHub, and writes `ar.py` as a thin project launcher.
+GitHub, installs runtime dependencies including `ansible-core`, and writes
+`ar.py` as a thin project launcher.
 
 Start the TUI from the Ansible project root:
 
@@ -65,11 +66,11 @@ Start the TUI from the Ansible project root:
 Convenience forms:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py | python3 -
+curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py | python3 -
 ```
 
 ```shell
-python3 <(curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py)
+python3 <(curl -fsSL https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py)
 ```
 
 If GitHub release downloads are blocked on the target machine, download both
@@ -77,27 +78,27 @@ release files on a machine that has access, copy them to the Ansible project
 root, then run the installer there:
 
 ```shell
-curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl
+curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/ansiblerunner-1.0.1-py3-none-any.whl
 ```
 
 ```shell
 python3 install.py
 ```
 
-When `ansiblerunner-1.0.0-py3-none-any.whl` is beside `install.py`, the
+When `ansiblerunner-1.0.1-py3-none-any.whl` is beside `install.py`, the
 installer uses that local wheel instead of downloading it from GitHub.
 
 You can also point the installer at a specific local wheel:
 
 ```shell
-python3 install.py --package-spec ./ansiblerunner-1.0.0-py3-none-any.whl
+python3 install.py --package-spec ./ansiblerunner-1.0.1-py3-none-any.whl
 ```
 
 Install the package directly from GitHub:
 
 ```shell
-python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.0/ansiblerunner-1.0.0-py3-none-any.whl"
+python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/ansiblerunner-1.0.1-py3-none-any.whl"
 ```
 
 Install from a local checkout for testing:
@@ -123,7 +124,9 @@ Expected project files:
   TUI. Nested files are ignored.
 - The first meaningful `# ...` comment near the top of a playbook is shown as
   the playbook title. If no title exists, the TUI shows `(no title)`.
-- `ansible-playbook`: must be available on `PATH` when a playbook is run.
+- `ansible-core` is installed into `.venv`, so `ar.py` uses the project-local
+  `ansible-playbook` command. Project-specific collections, roles, inventory,
+  and Ansible configuration remain owned by the Ansible project.
 
 Files created by the installer:
 

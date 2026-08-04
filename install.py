@@ -3,7 +3,7 @@
 # GitHub bootstrap installer for ansibleRunner.
 #
 # USAGE:
-#   curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.0/install.py
+#   curl -O https://raw.githubusercontent.com/dwfa/ansibleRunner/v1.0.1/install.py
 #   python3 install.py
 #
 # WORKFLOW:
@@ -38,7 +38,7 @@ from pathlib import Path
 
 
 PACKAGE_NAME = "ansibleRunner"
-DEFAULT_VERSION = "1.0.0"
+DEFAULT_VERSION = "1.0.1"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
 DEFAULT_REF = f"v{DEFAULT_VERSION}"
 DEFAULT_WHEEL_URL = (

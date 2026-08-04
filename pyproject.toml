@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ansibleRunner"
-version = "1.0.0"
+version = "1.0.1"
 description = "Reusable TUI and Ansible runner logic for project-local management tools."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "ansible-core>=2.16",
   "textual>=0.89",
 ]
 authors = [
