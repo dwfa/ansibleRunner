@@ -59,6 +59,25 @@ def testParserIgnoresRepeatedActiveTaskHeader() -> None:
     assert rows[2].duration == 3.0
 
 
+def testParserIgnoresRepeatedActivePlayHeader() -> None:
+    """Verify callback-first and stdout-later play headers do not duplicate."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("PLAY [Build image] ****************", now=2.0)
+    parser.processLine("TASK [manageImage : Download image] *****", now=3.0)
+    parser.processLine("ok: [localhost]", now=4.0)
+    parser.finalizePlay(now=5.0)
+
+    rows = parser.rows(now=6.0)
+
+    assert [(row.icon, row.name) for row in rows] == [
+        ("🎭", "Build image"),
+        ("⚙", "manageImage"),
+    ]
+
+
 def testParserRecordsPrettyTaskOutput() -> None:
     """Verify task output blocks render below their owning task row."""
 
@@ -85,6 +104,30 @@ def testParserRecordsPrettyTaskOutput() -> None:
     assert rows[3].output is not None
     assert rows[3].output.title == "Server summary"
     assert "db1   East US" in rows[3].output.body
+
+
+def testParserShowsPrettyTaskOutputAtRoleLevel() -> None:
+    """Verify pretty task output remains visible when task rows are hidden."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [List servers] ****************", now=1.0)
+    parser.processLine("TASK [niceDisplay: Server summary] *****", now=2.0)
+    parser.recordTaskOutput(
+        "niceDisplay: Server summary",
+        "Server summary",
+        "NAME\n----\ndb1",
+    )
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.icon, row.name, row.output is not None) for row in rows] == [
+        ("🎭", "List servers", False),
+        ("🔧", "niceDisplay: Server summary", False),
+        ("", "", True),
+    ]
 
 
 def testParserFinalizesCompletedRoleTaskAndPlay() -> None:

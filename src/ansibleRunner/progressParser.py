@@ -133,6 +133,11 @@ class AnsibleProgressParser:
 
         playMatch = PLAY_PATTERN.match(cleanLine)
         if playMatch:
+            if (
+                self.currentPlay is not None
+                and self.currentPlay.name == playMatch.group(1)
+            ):
+                return
             self.finalizePlay(now)
             self.currentPlay = ProgressItem(playMatch.group(1), now)
             self.idleStartTime = None
@@ -282,16 +287,32 @@ class AnsibleProgressParser:
             rows.append(self._row(1, "💬", interaction, now, False))
         for role in play.roles:
             rows.append(self._row(1, "⚙", role, now, False))
-            if self.outputLevel == "task":
+            if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
                 for task in role.tasks:
-                    self._appendTaskRows(rows, 2, task, now, False)
+                    self._appendTaskRows(
+                        rows,
+                        2,
+                        task,
+                        now,
+                        False,
+                        showTask=self.outputLevel == "task",
+                    )
             for interaction in role.interactions:
                 rows.append(self._row(2, "💬", interaction, now, False))
         if isActive and self.currentRole is not None:
             rows.append(self._row(1, "⚙", self.currentRole, now, True))
-            if self.outputLevel == "task":
+            if self.outputLevel == "task" or self._hasVisibleTaskOutput(
+                self.currentRole
+            ):
                 for task in self.currentRole.tasks:
-                    self._appendTaskRows(rows, 2, task, now, False)
+                    self._appendTaskRows(
+                        rows,
+                        2,
+                        task,
+                        now,
+                        False,
+                        showTask=self.outputLevel == "task",
+                    )
             for interaction in self.currentRole.interactions:
                 rows.append(self._row(2, "💬", interaction, now, False))
             if self.currentTask is not None and self._taskIsVisible(self.currentTask):
@@ -299,9 +320,16 @@ class AnsibleProgressParser:
         elif isActive and self.currentTask is not None:
             if self._taskIsVisible(self.currentTask):
                 self._appendTaskRows(rows, 1, self.currentTask, now, True)
-        if self.outputLevel == "task":
+        if self.outputLevel == "task" or self._hasVisibleTaskOutput(play):
             for task in play.tasks:
-                self._appendTaskRows(rows, 1, task, now, False)
+                self._appendTaskRows(
+                    rows,
+                    1,
+                    task,
+                    now,
+                    False,
+                    showTask=self.outputLevel == "task",
+                )
 
     def _appendTaskRows(
         self,
@@ -310,10 +338,12 @@ class AnsibleProgressParser:
         task: ProgressItem,
         now: float,
         isActive: bool,
+        showTask: bool = True,
     ) -> None:
         """Append a task row and any task output blocks."""
 
-        rows.append(self._row(depth, "🔧", task, now, isActive))
+        if showTask or task.outputs:
+            rows.append(self._row(depth, "🔧", task, now, isActive))
         for output in task.outputs:
             rows.append(
                 ProgressRow(
@@ -325,6 +355,12 @@ class AnsibleProgressParser:
                     output=output,
                 )
             )
+
+    @staticmethod
+    def _hasVisibleTaskOutput(item: ProgressItem) -> bool:
+        """Return whether an item has child task output blocks."""
+
+        return any(task.outputs for task in item.tasks)
 
     def _finalizeRole(self, now: float) -> None:
         """Finalize the active role."""
