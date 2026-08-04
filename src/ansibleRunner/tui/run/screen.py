@@ -505,6 +505,8 @@ class RunScreen(Container):
         task = eventRecord.get("task")
         if not isinstance(task, dict):
             return
+        if self._isStructuralIncludeTask(task):
+            return
         taskHeader = self._taskHeaderFromEvent(task)
         if taskHeader:
             self.progressParser.processLine(
@@ -533,6 +535,13 @@ class RunScreen(Container):
         if not roleName or " : " in taskName:
             return taskName
         return f"{roleName} : {taskName}"
+
+    @staticmethod
+    def _isStructuralIncludeTask(task: dict[str, object]) -> bool:
+        """Return whether a callback task is a structural include wrapper."""
+
+        action = str(task.get("action") or "")
+        return action.endswith("include_tasks")
 
     @staticmethod
     def _resultStateFromEvent(eventName: str) -> str:

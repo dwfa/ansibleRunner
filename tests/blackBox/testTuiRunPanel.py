@@ -219,6 +219,75 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     assert "msg:" not in renderedProgress
 
 
+def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
+    """Verify top-level niceDisplay includes do not jump ahead of role rows."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Test a few roles"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.ping",
+                "name": "ping : ping",
+                "role": "ping",
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "show niceDisplay sample",
+                "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.debug",
+                "name": "niceDisplay: Sample table output",
+                "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "msg": "NAME  STATUS\n----  ------\ntest  ok",
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "niceDisplay: Sample table output",
+                    "role": None,
+                },
+            },
+        }
+    )
+    runScreen.progressParser.finalizePlay(monotonic())
+    rows = runScreen.progressParser.rows(now=monotonic())
+
+    assert [(row.depth, row.icon, row.name, row.output is not None) for row in rows] == [
+        (0, "🎭", "Test a few roles", False),
+        (1, "⚙", "ping", False),
+        (2, "🔧", "ping", False),
+        (1, "🔧", "niceDisplay: Sample table output", False),
+        (2, "", "", True),
+    ]
+
+
 def testTuiRunPanelFormatsNiceDisplayListAndDictPayloads(tmp_path: Path) -> None:
     """Verify supported niceDisplay payload shapes format without noise."""
 

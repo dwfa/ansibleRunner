@@ -278,9 +278,6 @@ class AnsibleProgressParser:
         rows.append(self._row(0, "🎭", play, now, isActive))
         if self.outputLevel == "play":
             return
-        if self.outputLevel == "task":
-            for task in play.tasks:
-                self._appendTaskRows(rows, 1, task, now, False)
         for interaction in play.interactions:
             rows.append(self._row(1, "💬", interaction, now, False))
         for role in play.roles:
@@ -302,6 +299,9 @@ class AnsibleProgressParser:
         elif isActive and self.currentTask is not None:
             if self._taskIsVisible(self.currentTask):
                 self._appendTaskRows(rows, 1, self.currentTask, now, True)
+        if self.outputLevel == "task":
+            for task in play.tasks:
+                self._appendTaskRows(rows, 1, task, now, False)
 
     def _appendTaskRows(
         self,
