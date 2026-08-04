@@ -98,6 +98,8 @@ class PublishUi:
     dryRun: bool = False
     spinner: bool = True
     activeStep: str | None = None
+    activeStepPrinted: bool = False
+    activeStepSubstepCount: int = 0
     bodyLineCount: int = 0
     cursorHidden: bool = False
     panelLineCount: int = 0
@@ -117,6 +119,8 @@ class PublishUi:
 
         self.finishStep()
         self.activeStep = title
+        self.activeStepPrinted = False
+        self.activeStepSubstepCount = 0
         self.spinnerEvent = threading.Event()
         if self.spinner and sys.stdout.isatty():
             self.spinnerThread = threading.Thread(
@@ -127,6 +131,7 @@ class PublishUi:
         elif not sys.stdout.isatty():
             print(self._stepLine(title, "•"), flush=True)
             self.bodyLineCount += 1
+            self.activeStepPrinted = True
 
     def finishStep(self, success: bool = True) -> None:
         """Stop the active step and render its final marker."""
@@ -137,19 +142,34 @@ class PublishUi:
         title = self.activeStep
         self._stopSpinner()
         suffix = self._green("✅") if success else "❌"
-        if sys.stdout.isatty():
+        if sys.stdout.isatty() and self.activeStepPrinted:
+            moveUp = self.activeStepSubstepCount + 1
+            print(f"\033[{moveUp}F", end="", flush=True)
+            self._printTtyStatusLine(title, "", suffix)
+            print(flush=True)
+            if self.activeStepSubstepCount:
+                print(f"\033[{self.activeStepSubstepCount}E", end="", flush=True)
+        elif sys.stdout.isatty():
             self._printTtyStatusLine(title, "", suffix)
             print(flush=True)
             self.bodyLineCount += 1
+        elif not self.activeStepPrinted:
+            print(self._stepLine(title, "•", suffix), flush=True)
+            self.bodyLineCount += 1
 
         self.activeStep = None
+        self.activeStepPrinted = False
+        self.activeStepSubstepCount = 0
 
     def substep(self, detail: str) -> None:
         """Print a secondary detail line."""
 
+        self._materializeActiveStep()
         line = f"{self._leftPadding(self._panelWidth())}      ╰─ {detail}"
         print(self._subtleWhite(line), flush=True)
         self.bodyLineCount += 1
+        if self.activeStep is not None:
+            self.activeStepSubstepCount += 1
 
     def success(self, message: str) -> None:
         """Print a completed publish message."""
@@ -347,6 +367,20 @@ class PublishUi:
                 )
             frameIndex = (frameIndex + 1) % len(frames)
             time.sleep(0.1)
+
+    def _materializeActiveStep(self) -> None:
+        """Print the active step as a stable parent row before substeps."""
+
+        if self.activeStep is None or self.activeStepPrinted:
+            return
+
+        title = self.activeStep
+        self._stopSpinner()
+        if sys.stdout.isatty():
+            print("\r\033[K", end="", flush=True)
+        print(self._stepLine(title, "•"), flush=True)
+        self.bodyLineCount += 1
+        self.activeStepPrinted = True
 
     def _stopSpinner(self) -> None:
         """Stop and join the active spinner thread."""
