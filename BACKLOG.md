@@ -30,3 +30,9 @@
   where each phase can target a different inventory group through variables such
   as `buildRPiImageNode`, `postCreateNode`, or `buildDNSServerNode`, with
   `nodes` retained as the single-playbook fallback.
+
+- Consider allowing playbooks to run without a configured node.
+  Current behavior requires a saved `Node` value or `-n <node>` so the runner
+  can pass `nodes=<value>` consistently. Some playbooks may intentionally
+  define their own hosts and need no runner-supplied target. Decide whether to
+  support an explicit opt-out setting before changing the default guard.

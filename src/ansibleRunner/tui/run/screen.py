@@ -1024,6 +1024,8 @@ class RunScreen(Container):
 
         failedRows = [row for row in self.progressRows if row.status == "failed"]
         if not failedRows:
+            if self.result is not None and self.result.stderr:
+                return self.result.stderr.removeprefix("ERROR: ").strip()
             return "unknown"
         return " / ".join(row.name for row in failedRows)
 

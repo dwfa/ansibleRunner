@@ -16,23 +16,31 @@ from ansibleRunner.runner import AnsibleCommandRunner
 
 
 def testRunPlaybookMissingFileReturnsNoExecMarker(tmp_path: Path) -> None:
-    """Verify missing file returns empty command tuple and rc=1."""
+    """Verify missing file returns empty command tuple and diagnostic log."""
 
     runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
     result = runner.runPlaybook("nope.yaml", "web")
     assert result.returnCode == 1
     assert result.command == ()
-    assert result.logPath is None
+    assert result.logPath is not None
+    assert result.logPath.is_file()
+    assert result.eventLogPath is not None
+    assert result.eventLogPath.is_file()
+    assert "file not found" in result.logPath.read_text(encoding="utf-8")
 
 
 def testRunPlaybookMissingNodeReturnsNoExecMarker(tmp_path: Path) -> None:
-    """Verify missing node returns empty command tuple and rc=1."""
+    """Verify missing node returns empty command tuple and diagnostic log."""
 
     runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
     result = runner.runPlaybook("anything.yaml", "")
     assert result.returnCode == 1
     assert result.command == ()
-    assert result.logPath is None
+    assert result.logPath is not None
+    assert result.logPath.is_file()
+    assert result.eventLogPath is not None
+    assert result.eventLogPath.is_file()
+    assert "no node" in result.logPath.read_text(encoding="utf-8")
 
 
 def testRunPlaybookMissingNodeCheckedBeforeFileExistence(tmp_path: Path) -> None:

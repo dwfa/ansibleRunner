@@ -173,6 +173,34 @@ def testRunPlaybookCanReceiveInput(tmp_path: Path, monkeypatch: Any) -> None:
     assert any("continued" in line for line in outputLines)
 
 
+def testRunPlaybookReportsMissingAnsibleExecutable(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify missing ansible-playbook returns a diagnostic result."""
+
+    monkeypatch.setenv("PATH", "")
+    playbook = tmp_path / "playbooks" / "site.yaml"
+    playbook.parent.mkdir()
+    playbook.write_text("---\n", encoding="utf-8")
+    outputLines: list[str] = []
+
+    runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
+    result = runner.runPlaybook(
+        "playbooks/site.yaml",
+        "web",
+        echoOutput=False,
+        outputHandler=outputLines.append,
+    )
+
+    assert result.returnCode == 1
+    assert result.command == ()
+    assert "unable to start [ansible-playbook]" in result.stderr
+    assert result.logPath is not None
+    assert "unable to start" in result.logPath.read_text(encoding="utf-8")
+    assert any(line.startswith("Logging to ") for line in outputLines)
+
+
 def testRunPlaybookPrunesOldRunLogs(tmp_path: Path, monkeypatch: Any) -> None:
     """Verify native Ansible run logs keep only the newest five files."""
 

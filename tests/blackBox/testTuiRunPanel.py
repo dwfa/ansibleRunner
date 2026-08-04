@@ -36,7 +36,7 @@ from ansibleRunner.playbooks.models import PlaybookConfig
 from ansibleRunner.playbooks.playbookConfig import savePlaybookConfigs
 from ansibleRunner.tui.app import AnsibleRunnerTui
 from ansibleRunner.tui.launch.screen import LaunchScreen
-from ansibleRunner.tui.run.screen import RunScreen
+from ansibleRunner.tui.run.screen import SPINNER_FRAMES, RunScreen
 
 
 def _renderRich(renderable: object) -> str:
@@ -441,6 +441,39 @@ async def testTuiRunPanelShowsFailureDetails(
             for line in renderedLines
             if "Break host" in line
         )
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelShowsPreflightFailureLogPath(
+    tmp_path: Path,
+) -> None:
+    """Verify preflight runner failures show the reason and diagnostic log."""
+
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(outputLevel="task")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runFailure = pilot.app.query_one("#run-failure", Static)
+        renderedFailure = _renderRich(runFailure.content)
+
+        assert runFailure.display
+        assert "✗ Failure" in renderedFailure
+        assert "no node for" in renderedFailure
+        assert "log" in renderedFailure
+        assert "unavailable" not in renderedFailure
+        assert runScreen.result is not None
+        assert runScreen.result.logPath is not None
+        assert f"logs/{runScreen.result.logPath.name}" in renderedFailure
+        assert "no node" in runScreen.result.logPath.read_text(encoding="utf-8")
 
         await pilot.press("enter")
 
@@ -865,7 +898,7 @@ async def testTuiRunPanelShowsSyntheticWriteTaskAfterDestructivePrompt(
         renderedProgress = _renderRich(runProgress.content)
 
         assert "Writing image to device" in renderedProgress
-        assert "⠋" in renderedProgress or "⠙" in renderedProgress
+        assert any(frame in renderedProgress for frame in SPINNER_FRAMES)
         assert "write image to device" not in renderedProgress
 
         await waitForRunComplete(pilot)

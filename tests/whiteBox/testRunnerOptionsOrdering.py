@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ansibleRunner.runner import AnsibleCommandRunner
 
 
@@ -30,11 +32,12 @@ def testTestOnlyFlagOrderingIndependentOfArgvOrder() -> None:
     )
 
 
-def testBuildPlaybookCommandOrdering() -> None:
+def testBuildPlaybookCommandOrdering(tmp_path: Path) -> None:
     """Verify ordering: prog, testOnly, --extra-vars, extraArgs, playbook."""
 
+    runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
     options = AnsibleCommandRunner.parseOptions(["-c", "--", "--limit", "one"])
-    command = AnsibleCommandRunner.buildPlaybookCommand("p.yml", "web", options)
+    command = runner.buildPlaybookCommand("p.yml", "web", options)
     assert command[0] == "ansible-playbook"
     assert command[-1] == "p.yml"
     extraIdx = command.index("--extra-vars")

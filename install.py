@@ -3,7 +3,7 @@
 # GitHub bootstrap installer for ansibleRunner.
 #
 # USAGE:
-#   curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
+#   curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/install.py
 #   python3 install.py
 #
 # WORKFLOW:
@@ -38,7 +38,7 @@ from pathlib import Path
 
 
 PACKAGE_NAME = "ansibleRunner"
-DEFAULT_VERSION = "1.0.1"
+DEFAULT_VERSION = "1.0.2"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
 DEFAULT_REF = f"v{DEFAULT_VERSION}"
 DEFAULT_WHEEL_URL = (
@@ -67,6 +67,7 @@ class InstallerUi:
     activeStep: str | None = None
     activeStepHadSubsteps: bool = False
     activeStepPrinted: bool = False
+    activeStepSubstepCount: int = 0
     cursorHidden: bool = False
     spinnerEvent: threading.Event = field(default_factory=threading.Event)
     spinnerThread: threading.Thread | None = None
@@ -112,6 +113,7 @@ class InstallerUi:
         self.activeStep = title
         self.activeStepHadSubsteps = False
         self.activeStepPrinted = False
+        self.activeStepSubstepCount = 0
         if sys.stdout.isatty():
             self.hideCursor()
             self.spinnerEvent = threading.Event()
@@ -136,7 +138,14 @@ class InstallerUi:
         title = self.activeStep
         self._stopSpinner()
         marker = self._green("✅") if success else "❌"
-        if sys.stdout.isatty():
+        if sys.stdout.isatty() and self.activeStepPrinted:
+            moveUp = self.activeStepSubstepCount + 1
+            print(f"\033[{moveUp}F", end="", flush=True)
+            self._printTtyStatusLine(title, "", marker)
+            print(flush=True)
+            if self.activeStepSubstepCount:
+                print(f"\033[{self.activeStepSubstepCount}E", end="", flush=True)
+        elif sys.stdout.isatty():
             self._printTtyStatusLine(title, "", marker)
             print(flush=True)
         elif not self.activeStepPrinted:
@@ -144,6 +153,7 @@ class InstallerUi:
         self.activeStep = None
         self.activeStepHadSubsteps = False
         self.activeStepPrinted = False
+        self.activeStepSubstepCount = 0
 
     def substep(self, message: str) -> None:
         """Print an indented detail line.
@@ -152,10 +162,13 @@ class InstallerUi:
             message: Detail text.
         """
 
+        self._materializeActiveStep()
         width = self._panelWidth()
         detail = self._subtleWhite(f"    ╰─ {message}")
         print(f"{self._leftPadding(width)}{detail}", flush=True)
         self.activeStepHadSubsteps = True
+        if self.activeStep is not None:
+            self.activeStepSubstepCount += 1
 
     def success(self, launcherPath: Path) -> None:
         """Print final installer success details.
@@ -312,6 +325,19 @@ class InstallerUi:
             frameIndex = (frameIndex + 1) % len(frames)
             time.sleep(0.1)
 
+    def _materializeActiveStep(self) -> None:
+        """Print the active step as a stable parent row before substeps."""
+
+        if self.activeStep is None or self.activeStepPrinted:
+            return
+
+        title = self.activeStep
+        self._stopSpinner()
+        if sys.stdout.isatty():
+            print("\r\033[K", end="", flush=True)
+        print(self._stepLine(title, "•"), flush=True)
+        self.activeStepPrinted = True
+
     def _stopSpinner(self) -> None:
         """Stop and join the active spinner thread."""
 
@@ -356,24 +382,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ui.step("🧰 Prepare virtual environment")
         venvCreated = ensureVenv(venvDir, args.python, logPath, args.verbose)
-        ui.finishStep()
         if venvCreated:
-            ui.substep(f"Created {venvDir} ✅")
+            ui.substep(f"Created {venvDir}")
         else:
-            ui.substep(f"Using existing {venvDir} ✅")
+            ui.substep(f"Using existing {venvDir}")
+        ui.finishStep()
 
         ui.step("📦 Install ansibleRunner")
         installPackage(venvPython, packageSpec, logPath, args.verbose)
+        ui.substep(f"Installed {PACKAGE_NAME}")
         ui.finishStep()
-        ui.substep(f"Installed {PACKAGE_NAME} ✅")
 
         ui.step("📝 Write project launcher")
         writeLauncher(launcherPath, venvDir)
-        ui.finishStep()
-        ui.substep(f"Wrote {launcherPath} ✅")
+        ui.substep(f"Wrote {launcherPath}")
         staleLauncherPath = projectRoot / "ansibleRunner.py"
         if launcherPath.name != "ansibleRunner.py" and staleLauncherPath.exists():
             ui.substep(f"Remove old launcher to avoid recursion: {staleLauncherPath}")
+        ui.finishStep()
     except SystemExit:
         ui.finishStep(False)
         ui.failure("Install failed")

@@ -292,8 +292,8 @@ class AnsibleCommandRunner:
             testOnly=tuple(testOnly),
         )
 
-    @staticmethod
     def buildPlaybookCommand(
+        self,
         playbook: str | Path,
         node: str,
         options: RunnerOptions | None = None,
@@ -316,7 +316,7 @@ class AnsibleCommandRunner:
         if runnerOptions.syntaxCheck:
             extraVars.append("newTarget=localhost")
 
-        command: list[str] = ["ansible-playbook"]
+        command: list[str] = [str(self._resolveAnsiblePlaybookCommand())]
         command.extend(runnerOptions.testOnly)
         command.extend(["--extra-vars", " ".join(extraVars)])
         command.extend(runnerOptions.extraArgs)
@@ -413,28 +413,32 @@ class AnsibleCommandRunner:
 
         runnerOptions = options or RunnerOptions()
         node = runnerOptions.node or defaultNode
-        if not node:
-            return RunnerResult(
-                command=(),
-                returnCode=1,
-                stderr=(
-                    f"ERROR: no node for [{playbook}] -- entry has no default "
-                    "and -n <node> was not given"
-                ),
-                stdout="",
-            )
-
         playbookPath = self._resolvePlaybookPath(playbook)
-        if not playbookPath.is_file():
-            return RunnerResult(
-                command=(),
-                returnCode=1,
-                stderr=f"ERROR: file not found [{playbook}]!",
-                stdout="",
-            )
-
         logPath = self._buildLogPath(playbookPath)
         eventLogPath = self._buildEventLogPath(logPath)
+        if not node:
+            message = (
+                f"ERROR: no node for [{playbook}] -- entry has no default "
+                "and -n <node> was not given"
+            )
+            return self._preflightFailure(
+                message,
+                logPath,
+                eventLogPath,
+                outputHandler,
+                echoOutput,
+                emitOutput=False,
+            )
+
+        if not playbookPath.is_file():
+            return self._preflightFailure(
+                f"ERROR: file not found [{playbook}]!",
+                logPath,
+                eventLogPath,
+                outputHandler,
+                echoOutput,
+            )
+
         command = self.buildPlaybookCommand(playbook, node, runnerOptions)
         env = self._buildEnv(runnerOptions)
 
@@ -446,15 +450,25 @@ class AnsibleCommandRunner:
         self._writeOutput(f"Logging to {logPath}\n", outputHandler, echoOutput)
         self._writeOutput(f"Event log: {eventLogPath}\n", outputHandler, echoOutput)
 
-        returnCode = self._execAndTee(
-            command,
-            env,
-            logPath,
-            eventLogPath,
-            outputHandler,
-            echoOutput,
-            runControl,
-        )
+        try:
+            returnCode = self._execAndTee(
+                command,
+                env,
+                logPath,
+                eventLogPath,
+                outputHandler,
+                echoOutput,
+                runControl,
+            )
+        except OSError as exc:
+            message = self._commandStartFailureMessage(command, exc)
+            return self._preflightFailure(
+                message,
+                logPath,
+                eventLogPath,
+                outputHandler,
+                echoOutput,
+            )
         self._pruneRunLogs(playbookPath, logPath)
         return RunnerResult(
             command=command,
@@ -464,6 +478,61 @@ class AnsibleCommandRunner:
             logPath=logPath,
             eventLogPath=eventLogPath,
         )
+
+    def _preflightFailure(
+        self,
+        message: str,
+        logPath: Path,
+        eventLogPath: Path,
+        outputHandler: OutputHandler | None,
+        echoOutput: bool,
+        emitOutput: bool = True,
+    ) -> RunnerResult:
+        """Write a diagnostic run log for failures before Ansible starts.
+
+        Args:
+            message: Validation failure message.
+            logPath: Native Ansible log path reserved for this run.
+            eventLogPath: Event log path reserved for this run.
+            outputHandler: Optional callback for UI output.
+            echoOutput: Whether to echo output to stdout.
+
+        Returns:
+            No-exec runner result containing diagnostic log paths.
+        """
+
+        logPath.parent.mkdir(parents=True, exist_ok=True)
+        eventLogPath.touch(exist_ok=True)
+        logPath.write_text(
+            "\n".join(
+                [
+                    "native_ansible_log=0",
+                    "preflight_failure=1",
+                    f"cwd={self.projectRoot}",
+                    message,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        if emitOutput:
+            self._writeOutput(f"Logging to {logPath}\n", outputHandler, echoOutput)
+            self._writeOutput(f"Event log: {eventLogPath}\n", outputHandler, echoOutput)
+        return RunnerResult(
+            command=(),
+            returnCode=1,
+            stderr=message,
+            stdout="",
+            logPath=logPath,
+            eventLogPath=eventLogPath,
+        )
+
+    @staticmethod
+    def _commandStartFailureMessage(command: Sequence[str], exc: OSError) -> str:
+        """Return a useful subprocess start failure message."""
+
+        commandName = command[0] if command else "command"
+        return f"ERROR: unable to start [{commandName}]: {exc}"
 
     def _buildEnv(self, options: RunnerOptions) -> dict[str, str]:
         """Build the environment for an Ansible subprocess.
@@ -741,6 +810,17 @@ class AnsibleCommandRunner:
         if playbookPath.is_absolute():
             return playbookPath
         return self.projectRoot / playbookPath
+
+    def _resolveAnsiblePlaybookCommand(self) -> Path | str:
+        """Prefer the project-local ansible-playbook command when installed."""
+
+        if os.name == "nt":
+            projectCommand = self.projectRoot / ".venv" / "Scripts" / "ansible-playbook.exe"
+        else:
+            projectCommand = self.projectRoot / ".venv" / "bin" / "ansible-playbook"
+        if projectCommand.exists():
+            return projectCommand
+        return "ansible-playbook"
 
     def _resolveLogDir(self, logDir: Path | None) -> Path:
         """Resolve the log directory for playbook execution.

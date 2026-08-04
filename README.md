@@ -49,7 +49,7 @@ For a project-local install, download the Python installer from GitHub, inspect
 it if desired, then run it from the Ansible project root:
 
 ```shell
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/install.py
 python3 install.py
 ```
 
@@ -66,11 +66,11 @@ Start the TUI from the Ansible project root:
 Convenience forms:
 
 ```shell
-curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py | python3 -
+curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/install.py | python3 -
 ```
 
 ```shell
-python3 <(curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py)
+python3 <(curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/install.py)
 ```
 
 If GitHub release downloads are blocked on the target machine, download both
@@ -78,27 +78,31 @@ release files on a machine that has access, copy them to the Ansible project
 root, then run the installer there:
 
 ```shell
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/install.py
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/ansiblerunner-1.0.1-py3-none-any.whl
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/ansiblerunner-1.0.2-py3-none-any.whl
 ```
 
 ```shell
 python3 install.py
 ```
 
-When `ansiblerunner-1.0.1-py3-none-any.whl` is beside `install.py`, the
+When `ansiblerunner-1.0.2-py3-none-any.whl` is beside `install.py`, the
 installer uses that local wheel instead of downloading it from GitHub.
+
+The local wheel covers `ansibleRunner` itself. Pip still needs access to
+runtime dependencies such as `ansible-core` and `textual` through its cache, a
+company PyPI mirror, or another configured package source.
 
 You can also point the installer at a specific local wheel:
 
 ```shell
-python3 install.py --package-spec ./ansiblerunner-1.0.1-py3-none-any.whl
+python3 install.py --package-spec ./ansiblerunner-1.0.2-py3-none-any.whl
 ```
 
 Install the package directly from GitHub:
 
 ```shell
-python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.1/ansiblerunner-1.0.1-py3-none-any.whl"
+python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.2/ansiblerunner-1.0.2-py3-none-any.whl"
 ```
 
 Install from a local checkout for testing:
@@ -113,6 +117,27 @@ For editable local development:
 python3 -m pip install -e ".[dev]"
 ```
 
+## Publishing
+
+Publish releases from a clean git worktree after updating and committing the
+version in `pyproject.toml`, `install.py`, and the README install URLs.
+
+Preview the release steps:
+
+```shell
+python3 scripts/publish.py --dry-run
+```
+
+Publish the current `pyproject.toml` version:
+
+```shell
+python3 scripts/publish.py
+```
+
+The publisher runs the build, creates and pushes the `v<version>` tag, then
+creates the GitHub release with both `install.py` and the wheel attached. It
+requires the GitHub CLI (`gh`) to be installed and authenticated.
+
 ## Project Layout
 
 `ansibleRunner` treats the directory containing `ar.py` as the
@@ -124,6 +149,9 @@ Expected project files:
   TUI. Nested files are ignored.
 - The first meaningful `# ...` comment near the top of a playbook is shown as
   the playbook title. If no title exists, the TUI shows `(no title)`.
+- Each runnable playbook currently needs a saved `Node` value or a launch-time
+  `-n <node>` value. The runner passes that target through to Ansible as
+  `nodes=<value>` and stops before Ansible starts when no node is configured.
 - `ansible-core` is installed into `.venv`, so `ar.py` uses the project-local
   `ansible-playbook` command. Project-specific collections, roles, inventory,
   and Ansible configuration remain owned by the Ansible project.
@@ -171,7 +199,9 @@ The launch screen shows the exact Ansible arguments that will be used.
 
 The configure screen supports:
 
-- `Node`: passed as `-n <node>`.
+- `Node`: passed as `-n <node>` and then to Ansible as `nodes=<value>`.
+  This is required for the current release; runs without a node fail before
+  Ansible starts and write a diagnostic log.
 - `Output level`: `play`, `role`, or `task`.
 - `Debug`: passed as `-d`.
 - `Check`: passed as `-c`.

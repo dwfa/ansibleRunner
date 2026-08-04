@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ansibleRunner.runner import AnsibleCommandRunner
 
 
 def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
     """Verify wrapper-style flags build the expected Ansible command."""
 
+    runner = AnsibleCommandRunner(Path("/project"), Path("/project/logs"))
     options = AnsibleCommandRunner.parseOptions(
         [
             "-d",
@@ -37,7 +40,7 @@ def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
         ]
     )
 
-    command = AnsibleCommandRunner.buildPlaybookCommand(
+    command = runner.buildPlaybookCommand(
         "playbooks/site.yaml",
         "dns",
         options,
@@ -56,3 +59,16 @@ def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
         "custom=value",
         "playbooks/site.yaml",
     )
+
+
+def testBuildPlaybookCommandPrefersProjectVenvAnsible(tmp_path: Path) -> None:
+    """Verify project-local ansible-playbook is used when installed."""
+
+    ansiblePlaybook = tmp_path / ".venv" / "bin" / "ansible-playbook"
+    ansiblePlaybook.parent.mkdir(parents=True)
+    ansiblePlaybook.write_text("#!/bin/sh\n", encoding="utf-8")
+    runner = AnsibleCommandRunner(tmp_path, tmp_path / "logs")
+
+    command = runner.buildPlaybookCommand("playbooks/site.yaml", "dns")
+
+    assert command[0] == str(ansiblePlaybook)
