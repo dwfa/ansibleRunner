@@ -119,8 +119,10 @@ python3 -m pip install -e ".[dev]"
 
 ## Publishing
 
-Publish releases from a clean git worktree after updating and committing the
-version in `pyproject.toml`, `install.py`, and the README install URLs.
+Publish releases after updating and committing the version in `pyproject.toml`,
+`install.py`, and the README install URLs. The publisher requires both a clean
+git worktree and a current branch whose `HEAD` is already synced to its
+upstream.
 
 Preview the release steps:
 
@@ -134,9 +136,16 @@ Publish the current `pyproject.toml` version:
 python3 scripts/publish.py
 ```
 
-The publisher runs the build, creates and pushes the `v<version>` tag, then
-creates the GitHub release with both `install.py` and the wheel attached. It
-requires the GitHub CLI (`gh`) to be installed and authenticated.
+If the release commit is local and should be pushed as part of publishing, use:
+
+```shell
+python3 scripts/publish.py --push-branch
+```
+
+The publisher runs the build, optionally pushes the current branch, creates and
+pushes the `v<version>` tag, then creates the GitHub release with both
+`install.py` and the wheel attached. It requires the GitHub CLI (`gh`) to be
+installed and authenticated.
 
 ## Project Layout
 

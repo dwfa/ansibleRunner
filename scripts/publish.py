@@ -22,10 +22,12 @@
 #   1. Validate that the script is running from an ansibleRunner source tree.
 #   2. Read the package version from pyproject.toml.
 #   3. Require a clean git worktree.
-#   4. Verify the release tag does not already exist locally or remotely.
-#   5. Run scripts/build.py to test and build the release wheel.
-#   6. Create and push the annotated release tag.
-#   7. Create the GitHub release with install.py and the wheel attached.
+#   4. Require local HEAD to be synced to the branch upstream, or explicitly
+#      push the branch with --push-branch.
+#   5. Verify the release tag does not already exist locally or remotely.
+#   6. Run scripts/build.py to test and build the release wheel.
+#   7. Create and push the annotated release tag.
+#   8. Create the GitHub release with install.py and the wheel attached.
 #
 # NOTES:
 #   - This script publishes the version already declared in pyproject.toml.
@@ -96,6 +98,11 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         "--skip-build",
         action="store_true",
         help="Use an existing dist wheel instead of running scripts/build.py.",
+    )
+    parser.add_argument(
+        "--push-branch",
+        action="store_true",
+        help="Push the current branch to origin before tagging the release.",
     )
     return parser.parse_args(argv)
 
@@ -234,6 +241,124 @@ def requireCleanWorktree(projectRoot: Path) -> None:
     raise SystemExit(
         "Cannot publish with a dirty worktree. Commit or remove these changes first:\n"
         f"{result.stdout.rstrip()}"
+    )
+
+
+def getCurrentBranch(projectRoot: Path) -> str:
+    """Return the current checked-out git branch.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+
+    Returns:
+        Current branch name.
+
+    Raises:
+        SystemExit: When the repository is detached.
+    """
+
+    result = runCommand(
+        ["git", "branch", "--show-current"],
+        projectRoot,
+    )
+    branchName = result.stdout.strip()
+    if branchName:
+        return branchName
+
+    raise SystemExit("Cannot publish from a detached HEAD.")
+
+
+def getUpstreamBranch(projectRoot: Path) -> str:
+    """Return the configured upstream branch for the current branch.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+
+    Returns:
+        Upstream branch name such as ``origin/main``.
+
+    Raises:
+        SystemExit: When no upstream branch is configured.
+    """
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        capture_output=True,
+        check=False,
+        cwd=projectRoot,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+
+    raise SystemExit(
+        "Cannot publish because the current branch has no upstream. "
+        "Set one with git push -u origin <branch>."
+    )
+
+
+def requireHeadSyncedToUpstream(
+    projectRoot: Path,
+    branchName: str,
+    upstreamBranch: str,
+) -> None:
+    """Require local HEAD to match its upstream before publishing.
+
+    Args:
+        projectRoot: Project root containing the git repository.
+        branchName: Current local branch name.
+        upstreamBranch: Upstream branch name.
+
+    Raises:
+        SystemExit: When local and upstream commits differ.
+    """
+
+    head = runCommand(["git", "rev-parse", "HEAD"], projectRoot).stdout.strip()
+    upstreamHead = runCommand(
+        ["git", "rev-parse", upstreamBranch],
+        projectRoot,
+    ).stdout.strip()
+    if head == upstreamHead:
+        return
+
+    counts = runCommand(
+        ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstreamBranch}"],
+        projectRoot,
+    ).stdout.split()
+    aheadCount = int(counts[0]) if len(counts) >= 1 else 0
+    behindCount = int(counts[1]) if len(counts) >= 2 else 0
+    if aheadCount and not behindCount:
+        raise SystemExit(
+            f"Cannot publish because {branchName} has {aheadCount} local "
+            f"commit(s) not on {upstreamBranch}. Run git push origin "
+            f"{branchName}, or rerun publish with --push-branch."
+        )
+    if behindCount and not aheadCount:
+        raise SystemExit(
+            f"Cannot publish because {branchName} is behind {upstreamBranch} "
+            f"by {behindCount} commit(s). Pull/rebase before publishing."
+        )
+
+    raise SystemExit(
+        f"Cannot publish because {branchName} and {upstreamBranch} have "
+        f"diverged ({aheadCount} ahead, {behindCount} behind). Resolve the "
+        "branch state before publishing."
+    )
+
+
+def pushCurrentBranch(context: PublishContext, branchName: str) -> None:
+    """Push the current branch to origin.
+
+    Args:
+        context: Publish context.
+        branchName: Current local branch name.
+    """
+
+    runCommand(
+        ["git", "push", RELEASE_REMOTE, branchName],
+        context.projectRoot,
+        dryRun=context.dryRun,
+        mutates=True,
     )
 
 
@@ -411,8 +536,8 @@ def main(argv: list[str] | None = None) -> int:
         version = readProjectVersion(projectRoot)
         tagName = f"{TAG_PREFIX}{version}"
         requireCleanWorktree(projectRoot)
-        requireTagAvailable(projectRoot, tagName)
-        requireGhReleaseAvailable(projectRoot, tagName)
+        branchName = getCurrentBranch(projectRoot)
+        upstreamBranch = getUpstreamBranch(projectRoot)
 
         context = PublishContext(
             dryRun=args.dry_run,
@@ -422,6 +547,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         print(f"Publishing {PROJECT_NAME} {version}")
+        if args.push_branch:
+            pushCurrentBranch(context, branchName)
+            if not args.dry_run:
+                requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
+        else:
+            requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
+        requireTagAvailable(projectRoot, tagName)
+        requireGhReleaseAvailable(projectRoot, tagName)
         wheelPath = buildWheel(context, args.skip_build)
         print(f"Wheel: {wheelPath}")
         publishRelease(context, wheelPath)

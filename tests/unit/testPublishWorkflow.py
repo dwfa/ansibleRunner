@@ -7,7 +7,8 @@
 # WORKFLOW:
 #   1. Verify release versions are read from pyproject.toml.
 #   2. Verify dirty worktrees prevent publishing.
-#   3. Verify the publish command sequence pushes the tag and release assets.
+#   3. Verify unsynced branches prevent publishing unless explicitly pushed.
+#   4. Verify the publish command sequence pushes the tag and release assets.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
 # Licensed under Apache License 2.0. See LICENSE.md for details.
@@ -72,6 +73,80 @@ def testRequireCleanWorktreeRejectsDirtyStatus(
 
     assert "dirty worktree" in str(exc.value)
     assert "README.md" in str(exc.value)
+
+
+def testRequireHeadSyncedRejectsAheadBranch(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    """Verify publish.py rejects local commits that are not on upstream."""
+
+    publish = _loadPublishModule()
+
+    def fakeRunCommand(
+        command: list[str],
+        cwd: Path,
+        dryRun: bool = False,
+        mutates: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return git state where HEAD is ahead of upstream."""
+
+        del cwd, dryRun, mutates
+        if command == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout="local\n", stderr="")
+        if command == ["git", "rev-parse", "origin/main"]:
+            return subprocess.CompletedProcess(command, 0, stdout="remote\n", stderr="")
+        if command == [
+            "git",
+            "rev-list",
+            "--left-right",
+            "--count",
+            "HEAD...origin/main",
+        ]:
+            return subprocess.CompletedProcess(command, 0, stdout="1\t0\n", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(publish, "runCommand", fakeRunCommand)
+
+    with pytest.raises(SystemExit) as exc:
+        publish.requireHeadSyncedToUpstream(tmp_path, "main", "origin/main")
+
+    assert "main has 1 local commit(s)" in str(exc.value)
+    assert "--push-branch" in str(exc.value)
+
+
+def testPushCurrentBranchUsesOriginBranch(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    """Verify --push-branch pushes the current branch explicitly."""
+
+    publish = _loadPublishModule()
+    calls: list[list[str]] = []
+
+    def fakeRunCommand(
+        command: list[str],
+        cwd: Path,
+        dryRun: bool = False,
+        mutates: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        """Capture git push command."""
+
+        del cwd, dryRun, mutates
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(publish, "runCommand", fakeRunCommand)
+    context = publish.PublishContext(
+        dryRun=False,
+        projectRoot=tmp_path,
+        tagName="v1.2.3",
+        version="1.2.3",
+    )
+
+    publish.pushCurrentBranch(context, "main")
+
+    assert calls == [["git", "push", "origin", "main"]]
 
 
 def testPublishReleasePushesTagAndAssets(
