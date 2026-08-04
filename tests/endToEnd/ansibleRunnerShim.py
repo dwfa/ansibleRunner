@@ -37,7 +37,7 @@ from pathlib import Path
 PACKAGE_NAME = "ansibleRunner"
 WHEEL_PATH = Path(
     "/Volumes/dwfaData/Projects/ansible/ansibleRunner/dist/"
-    "ansiblerunner-1.0.2-py3-none-any.whl"
+    "ansiblerunner-1.0.3-py3-none-any.whl"
 )
 
 

@@ -27,14 +27,14 @@ from typing import Any
 
 
 def testPackageSpecDefaultsToV1ReleaseWheel() -> None:
-    """Verify the installer defaults to the v1.0.2 release wheel."""
+    """Verify the installer defaults to the v1.0.3 release wheel."""
 
     installer = _loadInstallerModule()
     args = installer.parseArgs([])
 
     assert installer.getPackageSpec(args) == (
         "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-        "v1.0.2/ansiblerunner-1.0.2-py3-none-any.whl"
+        "v1.0.3/ansiblerunner-1.0.3-py3-none-any.whl"
     )
 
 
@@ -42,7 +42,7 @@ def testPackageSpecPrefersProjectLocalWheel(tmp_path: Path) -> None:
     """Verify a manually downloaded release wheel is used when present."""
 
     installer = _loadInstallerModule()
-    wheelPath = tmp_path / "ansiblerunner-1.0.2-py3-none-any.whl"
+    wheelPath = tmp_path / "ansiblerunner-1.0.3-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     args = installer.parseArgs([])
 
@@ -56,7 +56,7 @@ def testPackageSpecCanInstallFromGit() -> None:
     args = installer.parseArgs(["--install-from-git"])
 
     assert installer.getPackageSpec(args) == (
-        "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.2"
+        "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.3"
     )
 
 
@@ -137,7 +137,7 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
     installer.installPackage(
         Path("/project/.venv/bin/python"),
         "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-        "v1.0.2/ansiblerunner-1.0.2-py3-none-any.whl",
+        "v1.0.3/ansiblerunner-1.0.3-py3-none-any.whl",
         tmp_path / "logs" / "install.log",
     )
 
@@ -150,7 +150,7 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
             "--upgrade",
             "--disable-pip-version-check",
             "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-            "v1.0.2/ansiblerunner-1.0.2-py3-none-any.whl",
+            "v1.0.3/ansiblerunner-1.0.3-py3-none-any.whl",
         ]
     ]
 
