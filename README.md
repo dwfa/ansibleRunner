@@ -117,36 +117,6 @@ For editable local development:
 python3 -m pip install -e ".[dev]"
 ```
 
-## Publishing
-
-Publish releases after updating and committing the version in `pyproject.toml`,
-`install.py`, and the README install URLs. The publisher requires both a clean
-git worktree and a current branch whose `HEAD` is already synced to its
-upstream.
-
-Preview the release steps:
-
-```shell
-python3 scripts/publish.py --dry-run
-```
-
-Publish the current `pyproject.toml` version:
-
-```shell
-python3 scripts/publish.py
-```
-
-If the release commit is local and should be pushed as part of publishing, use:
-
-```shell
-python3 scripts/publish.py --push-branch
-```
-
-The publisher runs the build, optionally pushes the current branch, creates and
-pushes the `v<version>` tag, then creates the GitHub release with both
-`install.py` and the wheel attached. It requires the GitHub CLI (`gh`) to be
-installed and authenticated.
-
 ## Project Layout
 
 `ansibleRunner` treats the directory containing `ar.py` as the
