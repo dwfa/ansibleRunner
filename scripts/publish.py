@@ -334,24 +334,16 @@ class PublishUi:
 
         width = self._panelWidth()
         leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixWidth = self._displayWidth(suffix)
+        suffixText = f" {suffix}" if suffix else ""
+        suffixWidth = self._displayWidth(suffixText)
         availableWidth = max(1, width - suffixWidth)
         fittedLeft = self._truncateRight(leftText, availableWidth)
-        return f"{self._leftPadding(width)}{self._padRight(fittedLeft, availableWidth)}{suffix}"
+        return f"{self._leftPadding(width)}{fittedLeft}{suffixText}"
 
     def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
-        """Print a status line with suffix placed at a fixed terminal column."""
+        """Print a status line with suffix placed beside the title."""
 
-        width = self._panelWidth()
-        leftPadding = self._leftPaddingWidth(width)
-        leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixWidth = self._displayWidth(suffix)
-        availableWidth = max(1, width - suffixWidth)
-        fittedLeft = self._truncateRight(leftText, availableWidth)
-        suffixColumn = leftPadding + width - suffixWidth + 1
-        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
-        if suffix:
-            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
+        print(f"\r\033[K{self._stepLine(title, prefix, suffix)}", end="", flush=True)
 
     def _renderSpinner(self) -> None:
         """Render the active step spinner until the step completes."""
