@@ -128,9 +128,10 @@ Expected project files:
   TUI. Nested files are ignored.
 - The first meaningful `# ...` comment near the top of a playbook is shown as
   the playbook title. If no title exists, the TUI shows `(no title)`.
-- Each runnable playbook currently needs a saved `Node` value or a launch-time
-  `-n <node>` value. The runner passes that target through to Ansible as
-  `nodes=<value>` and stops before Ansible starts when no node is configured.
+- A saved `Node` value or launch-time `-n <node>` value is optional. When set,
+  the runner passes that target through to Ansible as `nodes=<value>`. When
+  unset, the playbook is run without a `nodes` extra-var and can use its own
+  `hosts`, inventory, or variables.
 - `ansible-core` is installed into `.venv`, so `ar.py` uses the project-local
   `ansible-playbook` command. Project-specific collections, roles, inventory,
   and Ansible configuration remain owned by the Ansible project.
@@ -178,9 +179,9 @@ The launch screen shows the exact Ansible arguments that will be used.
 
 The configure screen supports:
 
-- `Node`: passed as `-n <node>` and then to Ansible as `nodes=<value>`.
-  This is required for the current release; runs without a node fail before
-  Ansible starts and write a diagnostic log.
+- `Node`: optional target passed as `-n <node>` and then to Ansible as
+  `nodes=<value>`. Leave it unset for playbooks that define their own `hosts`
+  or do not use the `nodes` extra-var.
 - `Output level`: `play`, `role`, or `task`.
 - `Debug`: passed as `-d`.
 - `Check`: passed as `-c`.

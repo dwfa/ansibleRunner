@@ -72,3 +72,29 @@ def testBuildPlaybookCommandPrefersProjectVenvAnsible(tmp_path: Path) -> None:
     command = runner.buildPlaybookCommand("playbooks/site.yaml", "dns")
 
     assert command[0] == str(ansiblePlaybook)
+
+
+def testBuildPlaybookCommandAllowsMissingNode() -> None:
+    """Verify node extra-vars are omitted when no node is configured."""
+
+    runner = AnsibleCommandRunner(Path("/project"), Path("/project/logs"))
+
+    command = runner.buildPlaybookCommand("playbooks/site.yaml", "")
+
+    assert command == ("ansible-playbook", "playbooks/site.yaml")
+
+
+def testBuildPlaybookCommandKeepsOtherExtraVarsWithoutNode() -> None:
+    """Verify non-node extra-vars still pass when no node is configured."""
+
+    runner = AnsibleCommandRunner(Path("/project"), Path("/project/logs"))
+    options = AnsibleCommandRunner.parseOptions(["-d"])
+
+    command = runner.buildPlaybookCommand("playbooks/site.yaml", "", options)
+
+    assert command == (
+        "ansible-playbook",
+        "--extra-vars",
+        "debugFlag=1",
+        "playbooks/site.yaml",
+    )

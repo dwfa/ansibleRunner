@@ -748,11 +748,13 @@ async def testTuiRunPanelShowsFailureDetails(
 
 
 @pytest.mark.asyncio
-async def testTuiRunPanelShowsPreflightFailureLogPath(
+async def testTuiRunPanelRunsWhenNodeIsUnset(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
-    """Verify preflight runner failures show the reason and diagnostic log."""
+    """Verify an unset node lets the playbook decide its own hosts."""
 
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
     defaults = RuntimeDefaults.forProject(tmp_path)
     savePlaybookConfigs(
@@ -766,18 +768,16 @@ async def testTuiRunPanelShowsPreflightFailureLogPath(
         await waitForRunComplete(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        runStatus = pilot.app.query_one("#run-status", Static)
         runFailure = pilot.app.query_one("#run-failure", Static)
-        renderedFailure = _renderRich(runFailure.content)
 
-        assert runFailure.display
-        assert "✗ Failure" in renderedFailure
-        assert "no node for" in renderedFailure
-        assert "log" in renderedFailure
-        assert "unavailable" not in renderedFailure
+        assert str(runStatus.content).startswith("Finished: success  elapsed=")
+        assert not runFailure.display
         assert runScreen.result is not None
         assert runScreen.result.logPath is not None
-        assert f"logs/{runScreen.result.logPath.name}" in renderedFailure
-        assert "no node" in runScreen.result.logPath.read_text(encoding="utf-8")
+        logText = runScreen.result.logPath.read_text(encoding="utf-8")
+        assert "nodes=" not in logText
+        assert "no node" not in logText
 
         await pilot.press("enter")
 

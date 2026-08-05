@@ -310,7 +310,9 @@ class AnsibleCommandRunner:
         """
 
         runnerOptions = options or RunnerOptions()
-        extraVars: list[str] = [f"nodes={node}"]
+        extraVars: list[str] = []
+        if node:
+            extraVars.append(f"nodes={node}")
         if runnerOptions.debugFlag:
             extraVars.append("debugFlag=1")
         if runnerOptions.syntaxCheck:
@@ -318,7 +320,8 @@ class AnsibleCommandRunner:
 
         command: list[str] = [str(self._resolveAnsiblePlaybookCommand())]
         command.extend(runnerOptions.testOnly)
-        command.extend(["--extra-vars", " ".join(extraVars)])
+        if extraVars:
+            command.extend(["--extra-vars", " ".join(extraVars)])
         command.extend(runnerOptions.extraArgs)
         command.append(str(playbook))
         return tuple(command)
@@ -416,20 +419,6 @@ class AnsibleCommandRunner:
         playbookPath = self._resolvePlaybookPath(playbook)
         logPath = self._buildLogPath(playbookPath)
         eventLogPath = self._buildEventLogPath(logPath)
-        if not node:
-            message = (
-                f"ERROR: no node for [{playbook}] -- entry has no default "
-                "and -n <node> was not given"
-            )
-            return self._preflightFailure(
-                message,
-                logPath,
-                eventLogPath,
-                outputHandler,
-                echoOutput,
-                emitOutput=False,
-            )
-
         if not playbookPath.is_file():
             return self._preflightFailure(
                 f"ERROR: file not found [{playbook}]!",
