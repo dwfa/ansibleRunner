@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import re
 import json
+import shutil
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from time import monotonic
@@ -267,6 +270,12 @@ class RunScreen(Container):
         if not text:
             return
         self.app.copy_to_clipboard(text)
+        helpText = self.query_one("#run-help", Static)
+        if self._copyTextWithNativeTool(text):
+            helpText.update("Copied output to clipboard")
+        else:
+            helpText.update("Copy sent to terminal clipboard")
+        self.set_timer(1.5, lambda: helpText.update(self._completedHelpText()))
 
     async def action_send_enter(self) -> None:
         """Send input to the active playbook or return after completion."""
@@ -838,6 +847,34 @@ class RunScreen(Container):
                 continue
             blocks.append(f"{row.output.title}\n{row.output.body}".rstrip())
         return "\n\n".join(blocks)
+
+    @staticmethod
+    def _copyTextWithNativeTool(text: str) -> bool:
+        """Copy text with an OS clipboard command when one is available."""
+
+        command: list[str] | None = None
+        if sys.platform == "darwin" and shutil.which("pbcopy"):
+            command = ["pbcopy"]
+        elif shutil.which("wl-copy"):
+            command = ["wl-copy"]
+        elif shutil.which("xclip"):
+            command = ["xclip", "-selection", "clipboard"]
+        elif shutil.which("xsel"):
+            command = ["xsel", "--clipboard", "--input"]
+        if command is None:
+            return False
+        try:
+            subprocess.run(
+                command,
+                input=text,
+                text=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return False
+        return True
 
     def _renderProgress(self) -> Table | Text:
         """Build rich progress renderable for the run panel.

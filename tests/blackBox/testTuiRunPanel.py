@@ -32,6 +32,7 @@ from rich.text import Text
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Input, Static
 
+import ansibleRunner.tui.run.screen as runScreenModule
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig
 from ansibleRunner.playbooks.playbookConfig import savePlaybookConfigs
@@ -303,6 +304,38 @@ def testTuiRunPanelFormatsNiceDisplayListAndDictPayloads(tmp_path: Path) -> None
     assert runScreen._prettyPayloadBody({"name": "db1", "region": "East US"}) == (
         "name: db1\nregion: East US"
     )
+
+
+def testTuiRunPanelCopiesOutputWithNativeClipboardTool(monkeypatch: Any) -> None:
+    """Verify pretty output copy uses an available native clipboard command."""
+
+    calls = []
+
+    def fakeWhich(command: str) -> str | None:
+        if command == "pbcopy":
+            return "/usr/bin/pbcopy"
+        return None
+
+    def fakeRun(command: list[str], **kwargs: object) -> None:
+        calls.append((command, kwargs["input"]))
+
+    monkeypatch.setattr(runScreenModule.sys, "platform", "darwin")
+    monkeypatch.setattr(runScreenModule.shutil, "which", fakeWhich)
+    monkeypatch.setattr(runScreenModule.subprocess, "run", fakeRun)
+
+    assert RunScreen._copyTextWithNativeTool("title\nbody")
+    assert calls == [(["pbcopy"], "title\nbody")]
+
+
+def testTuiRunPanelCopyFallsBackWhenNativeClipboardUnavailable(
+    monkeypatch: Any,
+) -> None:
+    """Verify copy gracefully falls back when native clipboard tools are absent."""
+
+    monkeypatch.setattr(runScreenModule.sys, "platform", "linux")
+    monkeypatch.setattr(runScreenModule.shutil, "which", lambda command: None)
+
+    assert not RunScreen._copyTextWithNativeTool("title\nbody")
 
 
 @pytest.mark.asyncio
