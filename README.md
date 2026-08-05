@@ -202,6 +202,14 @@ the progress panel.
 - Press `Ctrl-Z` to suspend.
 - Scroll up to inspect earlier progress; auto-follow resumes when you scroll
   back to the bottom.
+- After a run completes, press `Enter`, `Space`, or `Esc` to return to the
+  launch screen.
+- Tasks named `niceDisplay: <title>` render their `msg` payload as a boxed
+  display block. The internal `niceDisplay:` task row is hidden from the
+  progress tree.
+- When boxed display output is visible, press `y` to copy the full block, or
+  use `Fn`-drag selection followed by `⌘C` to copy selected text in terminals
+  that support it.
 
 ## Direct CLI
 
