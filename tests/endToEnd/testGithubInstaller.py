@@ -56,6 +56,38 @@ def testPackageSpecPrefersNewestProjectLocalWheel(tmp_path: Path) -> None:
     assert installer.getPackageSpec(args, tmp_path) == str(wheelPath)
 
 
+def testPackageSpecFindsWheelBesideInstaller(tmp_path: Path) -> None:
+    """Verify a wheel beside install.py is used even with a different project root."""
+
+    installer = _loadInstallerModule()
+    projectRoot = tmp_path / "project"
+    installerRoot = tmp_path / "downloads"
+    projectRoot.mkdir()
+    installerRoot.mkdir()
+    wheelPath = installerRoot / "ansiblerunner-1.0.5-py3-none-any.whl"
+    wheelPath.write_text("wheel\n", encoding="utf-8")
+    args = installer.parseArgs([])
+
+    assert installer.getPackageSpec(args, projectRoot, installerRoot) == str(wheelPath)
+
+
+def testPackageSpecChoosesNewestLocalWheelAcrossSearchRoots(tmp_path: Path) -> None:
+    """Verify local wheel selection is version-based across all local roots."""
+
+    installer = _loadInstallerModule()
+    projectRoot = tmp_path / "project"
+    installerRoot = tmp_path / "downloads"
+    projectRoot.mkdir()
+    installerRoot.mkdir()
+    oldWheelPath = projectRoot / "ansiblerunner-1.0.9-py3-none-any.whl"
+    oldWheelPath.write_text("wheel\n", encoding="utf-8")
+    wheelPath = installerRoot / "ansiblerunner-1.0.10-py3-none-any.whl"
+    wheelPath.write_text("wheel\n", encoding="utf-8")
+    args = installer.parseArgs([])
+
+    assert installer.getPackageSpec(args, projectRoot, installerRoot) == str(wheelPath)
+
+
 def testLatestReleaseWheelUrlPrefersHighestWheelVersion(monkeypatch: Any) -> None:
     """Verify remote release selection uses wheel version, not release order."""
 

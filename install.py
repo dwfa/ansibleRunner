@@ -386,7 +386,8 @@ def main(argv: list[str] | None = None) -> int:
     venvDir = args.venvDir.expanduser()
     if not venvDir.is_absolute():
         venvDir = projectRoot / venvDir
-    packageSpec = getPackageSpec(args, projectRoot)
+    installerRoot = Path(__file__).resolve().parent
+    packageSpec = getPackageSpec(args, projectRoot, installerRoot)
     launcherPath = projectRoot / args.launcherName
     logPath = getInstallLogPath(projectRoot)
     venvPython = getVenvPython(venvDir)
@@ -509,12 +510,17 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def getPackageSpec(args: argparse.Namespace, projectRoot: Path | None = None) -> str:
+def getPackageSpec(
+    args: argparse.Namespace,
+    projectRoot: Path | None = None,
+    installerRoot: Path | None = None,
+) -> str:
     """Return the pip package spec for ansibleRunner.
 
     Args:
         args: Parsed installer arguments.
         projectRoot: Optional project root for local wheel discovery.
+        installerRoot: Optional installer directory for local wheel discovery.
 
     Returns:
         PEP 508 direct reference package spec.
@@ -523,34 +529,37 @@ def getPackageSpec(args: argparse.Namespace, projectRoot: Path | None = None) ->
     if args.packageSpec:
         return str(args.packageSpec)
     if not args.installFromGit:
-        if projectRoot is not None:
-            localWheel = findLocalWheel(projectRoot)
-            if localWheel.is_file():
-                return str(localWheel)
+        localWheel = findLocalWheel([projectRoot, installerRoot])
+        if localWheel is not None:
+            return str(localWheel)
         wheelUrl = args.wheelUrl or latestReleaseWheelUrl()
         return f"{PACKAGE_NAME} @ {wheelUrl}"
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
 
 
-def findLocalWheel(projectRoot: Path) -> Path:
-    """Return the newest local ansibleRunner wheel beside the installer.
+def findLocalWheel(searchRoots: list[Path | None]) -> Path | None:
+    """Return the newest local ansibleRunner wheel from local search roots.
 
     Args:
-        projectRoot: Project root to inspect.
+        searchRoots: Project and installer directories to inspect.
 
     Returns:
-        Newest matching wheel path, or a non-existent fallback path when none
-        are present.
+        Newest matching wheel path, or ``None`` when none are present.
     """
 
-    wheels = sorted(
-        projectRoot.glob("ansiblerunner-*-py3-none-any.whl"),
-        key=lambda path: wheelSortKey(path.name),
-        reverse=True,
-    )
-    if wheels:
-        return wheels[0]
-    return projectRoot / "ansiblerunner-*.whl"
+    wheels: list[Path] = []
+    seenRoots: set[Path] = set()
+    for searchRoot in searchRoots:
+        if searchRoot is None:
+            continue
+        root = searchRoot.expanduser().resolve()
+        if root in seenRoots:
+            continue
+        seenRoots.add(root)
+        wheels.extend(root.glob("ansiblerunner-*-py3-none-any.whl"))
+    if not wheels:
+        return None
+    return max(wheels, key=lambda path: wheelSortKey(path.name))
 
 
 def wheelSortKey(name: str) -> tuple[int, ...]:
