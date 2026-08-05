@@ -99,8 +99,11 @@ company PyPI mirror, or another configured package source.
 You can also point the installer at a specific local wheel:
 
 ```shell
-python3 install.py --package-spec ./ansiblerunner-<version>-py3-none-any.whl
+python3 install.py -w ./ansiblerunner-<version>-py3-none-any.whl
 ```
+
+Use `--package-spec` only when you need to pass a full custom pip package spec,
+such as a fork, checkout, or test artifact.
 
 Install the package directly from a downloaded wheel:
 

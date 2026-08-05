@@ -43,49 +43,43 @@ def testPackageSpecDefaultsToLatestReleaseWheel(monkeypatch: Any) -> None:
     )
 
 
-def testPackageSpecPrefersNewestProjectLocalWheel(tmp_path: Path) -> None:
-    """Verify the newest manually downloaded release wheel is used when present."""
+def testPackageSpecUsesExplicitWheel(tmp_path: Path) -> None:
+    """Verify -w/--whl uses the requested wheel directly."""
 
     installer = _loadInstallerModule()
-    oldWheelPath = tmp_path / "ansiblerunner-1.0.4-py3-none-any.whl"
-    oldWheelPath.write_text("wheel\n", encoding="utf-8")
     wheelPath = tmp_path / "ansiblerunner-1.0.5-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
-    args = installer.parseArgs([])
+    args = installer.parseArgs(["-w", str(wheelPath)])
 
-    assert installer.getPackageSpec(args, tmp_path) == str(wheelPath)
+    assert installer.getPackageSpec(args) == str(wheelPath.resolve())
 
 
 def testPackageSpecFindsWheelBesideInstaller(tmp_path: Path) -> None:
-    """Verify a wheel beside install.py is used even with a different project root."""
+    """Verify a wheel beside install.py is used when -w is not supplied."""
 
     installer = _loadInstallerModule()
-    projectRoot = tmp_path / "project"
     installerRoot = tmp_path / "downloads"
-    projectRoot.mkdir()
     installerRoot.mkdir()
     wheelPath = installerRoot / "ansiblerunner-1.0.5-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     args = installer.parseArgs([])
 
-    assert installer.getPackageSpec(args, projectRoot, installerRoot) == str(wheelPath)
+    assert installer.getPackageSpec(args, installerRoot) == str(wheelPath)
 
 
-def testPackageSpecChoosesNewestLocalWheelAcrossSearchRoots(tmp_path: Path) -> None:
-    """Verify local wheel selection is version-based across all local roots."""
+def testPackageSpecChoosesNewestWheelBesideInstaller(tmp_path: Path) -> None:
+    """Verify installer-directory wheel selection is version-based."""
 
     installer = _loadInstallerModule()
-    projectRoot = tmp_path / "project"
     installerRoot = tmp_path / "downloads"
-    projectRoot.mkdir()
     installerRoot.mkdir()
-    oldWheelPath = projectRoot / "ansiblerunner-1.0.9-py3-none-any.whl"
+    oldWheelPath = installerRoot / "ansiblerunner-1.0.9-py3-none-any.whl"
     oldWheelPath.write_text("wheel\n", encoding="utf-8")
     wheelPath = installerRoot / "ansiblerunner-1.0.10-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     args = installer.parseArgs([])
 
-    assert installer.getPackageSpec(args, projectRoot, installerRoot) == str(wheelPath)
+    assert installer.getPackageSpec(args, installerRoot) == str(wheelPath)
 
 
 def testLatestReleaseWheelUrlPrefersHighestWheelVersion(monkeypatch: Any) -> None:

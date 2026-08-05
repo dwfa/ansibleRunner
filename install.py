@@ -387,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     if not venvDir.is_absolute():
         venvDir = projectRoot / venvDir
     installerRoot = Path(__file__).resolve().parent
-    packageSpec = getPackageSpec(args, projectRoot, installerRoot)
+    packageSpec = getPackageSpec(args, installerRoot)
     launcherPath = projectRoot / args.launcherName
     logPath = getInstallLogPath(projectRoot)
     venvPython = getVenvPython(venvDir)
@@ -483,6 +483,18 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-w",
+        "--whl",
+        dest="wheelPath",
+        type=Path,
+        default=(
+            Path(os.environ["ANSIBLE_RUNNER_WHL"])
+            if "ANSIBLE_RUNNER_WHL" in os.environ
+            else None
+        ),
+        help="Local ansibleRunner wheel file to install before checking GitHub.",
+    )
+    parser.add_argument(
         "--install-from-git",
         dest="installFromGit",
         action="store_true",
@@ -512,14 +524,12 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
 
 def getPackageSpec(
     args: argparse.Namespace,
-    projectRoot: Path | None = None,
     installerRoot: Path | None = None,
 ) -> str:
     """Return the pip package spec for ansibleRunner.
 
     Args:
         args: Parsed installer arguments.
-        projectRoot: Optional project root for local wheel discovery.
         installerRoot: Optional installer directory for local wheel discovery.
 
     Returns:
@@ -529,7 +539,9 @@ def getPackageSpec(
     if args.packageSpec:
         return str(args.packageSpec)
     if not args.installFromGit:
-        localWheel = findLocalWheel([projectRoot, installerRoot])
+        if args.wheelPath is not None:
+            return str(args.wheelPath.expanduser().resolve())
+        localWheel = findLocalWheel(installerRoot)
         if localWheel is not None:
             return str(localWheel)
         wheelUrl = args.wheelUrl or latestReleaseWheelUrl()
@@ -537,26 +549,21 @@ def getPackageSpec(
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
 
 
-def findLocalWheel(searchRoots: list[Path | None]) -> Path | None:
-    """Return the newest local ansibleRunner wheel from local search roots.
+def findLocalWheel(installerRoot: Path | None) -> Path | None:
+    """Return the newest local ansibleRunner wheel beside the installer.
 
     Args:
-        searchRoots: Project and installer directories to inspect.
+        installerRoot: Installer directory to inspect.
 
     Returns:
         Newest matching wheel path, or ``None`` when none are present.
     """
 
-    wheels: list[Path] = []
-    seenRoots: set[Path] = set()
-    for searchRoot in searchRoots:
-        if searchRoot is None:
-            continue
-        root = searchRoot.expanduser().resolve()
-        if root in seenRoots:
-            continue
-        seenRoots.add(root)
-        wheels.extend(root.glob("ansiblerunner-*-py3-none-any.whl"))
+    if installerRoot is None:
+        return None
+    wheels = list(
+        installerRoot.expanduser().resolve().glob("ansiblerunner-*-py3-none-any.whl")
+    )
     if not wheels:
         return None
     return max(wheels, key=lambda path: wheelSortKey(path.name))
