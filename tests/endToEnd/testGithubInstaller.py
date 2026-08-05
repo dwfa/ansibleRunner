@@ -26,23 +26,29 @@ from pathlib import Path
 from typing import Any
 
 
-def testPackageSpecDefaultsToV1ReleaseWheel() -> None:
-    """Verify the installer defaults to the v1.0.4 release wheel."""
+def testPackageSpecDefaultsToLatestReleaseWheel(monkeypatch: Any) -> None:
+    """Verify the installer defaults to the latest release wheel."""
 
     installer = _loadInstallerModule()
+    monkeypatch.setattr(
+        installer,
+        "latestReleaseWheelUrl",
+        lambda: "https://example.test/ansiblerunner-9.9.9-py3-none-any.whl",
+    )
     args = installer.parseArgs([])
 
     assert installer.getPackageSpec(args) == (
-        "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-        "v1.0.4/ansiblerunner-1.0.4-py3-none-any.whl"
+        "ansibleRunner @ https://example.test/ansiblerunner-9.9.9-py3-none-any.whl"
     )
 
 
-def testPackageSpecPrefersProjectLocalWheel(tmp_path: Path) -> None:
-    """Verify a manually downloaded release wheel is used when present."""
+def testPackageSpecPrefersNewestProjectLocalWheel(tmp_path: Path) -> None:
+    """Verify the newest manually downloaded release wheel is used when present."""
 
     installer = _loadInstallerModule()
-    wheelPath = tmp_path / "ansiblerunner-1.0.4-py3-none-any.whl"
+    oldWheelPath = tmp_path / "ansiblerunner-1.0.4-py3-none-any.whl"
+    oldWheelPath.write_text("wheel\n", encoding="utf-8")
+    wheelPath = tmp_path / "ansiblerunner-1.0.5-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     args = installer.parseArgs([])
 
@@ -56,7 +62,7 @@ def testPackageSpecCanInstallFromGit() -> None:
     args = installer.parseArgs(["--install-from-git"])
 
     assert installer.getPackageSpec(args) == (
-        "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@v1.0.4"
+        "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@main"
     )
 
 
@@ -69,16 +75,18 @@ def testPackageSpecCanBeOverridden() -> None:
     assert installer.getPackageSpec(args) == "/tmp/ansibleRunner"
 
 
-def testInstallerUiKeepsStatusMarkerNearStepText() -> None:
-    """Verify installer status markers are not floated to the panel edge."""
+def testInstallerUiAlignsStatusMarkerInStatusColumn() -> None:
+    """Verify installer status markers are aligned away from step text."""
 
     installer = _loadInstallerModule()
     ui = installer.InstallerUi(Path("/tmp/install.log"))
 
     line = ui._stepLine("Install ansibleRunner", "", "✅")
+    titleEnd = line.index("Install ansibleRunner") + len("Install ansibleRunner")
+    markerIndex = line.index("✅")
 
-    assert "Install ansibleRunner ✅" in line
-    assert "Install ansibleRunner  ✅" not in line
+    assert line.rstrip().endswith("✅")
+    assert markerIndex - titleEnd > 5
 
 
 def testEnsureVenvCreatesMissingEnvironment(monkeypatch: Any, tmp_path: Path) -> None:
@@ -148,8 +156,7 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
 
     installer.installPackage(
         Path("/project/.venv/bin/python"),
-        "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-        "v1.0.4/ansiblerunner-1.0.4-py3-none-any.whl",
+        "ansibleRunner @ https://example.test/ansiblerunner-9.9.9-py3-none-any.whl",
         tmp_path / "logs" / "install.log",
     )
 
@@ -161,8 +168,7 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
             "install",
             "--upgrade",
             "--disable-pip-version-check",
-            "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/"
-            "v1.0.4/ansiblerunner-1.0.4-py3-none-any.whl",
+            "ansibleRunner @ https://example.test/ansiblerunner-9.9.9-py3-none-any.whl",
         ]
     ]
 

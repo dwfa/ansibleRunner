@@ -65,6 +65,7 @@ GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
 RESET_COLOUR = "\033[0m"
 SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
+ANSI_PATTERN_TEXT = "\033\\[[0-9;]*m"
 HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
 
@@ -263,7 +264,7 @@ class PublishUi:
         """Calculate approximate terminal display width."""
 
         width = 0
-        for character in text:
+        for character in self._plainText(text):
             codepoint = ord(character)
             if unicodedata.combining(character):
                 continue
@@ -278,6 +279,11 @@ class PublishUi:
             else:
                 width += 1
         return width
+
+    def _plainText(self, text: str) -> str:
+        """Remove ANSI colour sequences from text."""
+
+        return re.sub(ANSI_PATTERN_TEXT, "", text)
 
     def _padRight(self, text: str, width: int) -> str:
         """Pad text to a target terminal display width."""
@@ -334,16 +340,25 @@ class PublishUi:
 
         width = self._panelWidth()
         leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixText = f" {suffix}" if suffix else ""
-        suffixWidth = self._displayWidth(suffixText)
+        suffixWidth = self._displayWidth(suffix)
         availableWidth = max(1, width - suffixWidth)
         fittedLeft = self._truncateRight(leftText, availableWidth)
-        return f"{self._leftPadding(width)}{fittedLeft}{suffixText}"
+        paddedLeft = self._padRight(fittedLeft, availableWidth)
+        return f"{self._leftPadding(width)}{paddedLeft}{suffix}"
 
     def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
-        """Print a status line with suffix placed beside the title."""
+        """Print a status line with suffix placed at a fixed terminal column."""
 
-        print(f"\r\033[K{self._stepLine(title, prefix, suffix)}", end="", flush=True)
+        width = self._panelWidth()
+        leftPadding = self._leftPaddingWidth(width)
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        suffixColumn = leftPadding + width - suffixWidth + 1
+        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
+        if suffix:
+            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
 
     def _renderSpinner(self) -> None:
         """Render the active step spinner until the step completes."""

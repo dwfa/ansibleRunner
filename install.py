@@ -3,7 +3,7 @@
 # GitHub bootstrap installer for ansibleRunner.
 #
 # USAGE:
-#   curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/install.py
+#   curl -LO https://github.com/dwfa/ansibleRunner/releases/latest/download/install.py
 #   python3 install.py
 #
 # WORKFLOW:
@@ -24,7 +24,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,25 +34,24 @@ import textwrap
 import threading
 import time
 import unicodedata
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 
 PACKAGE_NAME = "ansibleRunner"
-DEFAULT_VERSION = "1.0.4"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
-DEFAULT_REF = f"v{DEFAULT_VERSION}"
-DEFAULT_WHEEL_URL = (
-    "https://github.com/dwfa/ansibleRunner/releases/download/"
-    f"{DEFAULT_REF}/ansiblerunner-{DEFAULT_VERSION}-py3-none-any.whl"
+DEFAULT_REF = "main"
+DEFAULT_RELEASE_API_URL = (
+    "https://api.github.com/repos/dwfa/ansibleRunner/releases/latest"
 )
-DEFAULT_WHEEL_NAME = f"ansiblerunner-{DEFAULT_VERSION}-py3-none-any.whl"
 DEFAULT_LAUNCHER_NAME = "ar.py"
 GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
 RESET_COLOUR = "\033[0m"
 SUBTLE_WHITE_COLOUR = "\033[38;5;250m"
+ANSI_PATTERN_TEXT = "\033\\[[0-9;]*m"
 HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
 
@@ -87,7 +88,7 @@ class InstallerUi:
         lines = [
             f"{self._leftPadding(width)}{top}",
             self._panelLine(
-                self._truncateRight(f"🚀 {PACKAGE_NAME} Installer ({DEFAULT_REF})", innerWidth),
+                self._truncateRight(f"🚀 {PACKAGE_NAME} Installer (latest)", innerWidth),
                 width,
             ),
             self._panelLine("", width),
@@ -239,7 +240,7 @@ class InstallerUi:
         """Calculate approximate terminal display width."""
 
         width = 0
-        for character in text:
+        for character in self._plainText(text):
             codepoint = ord(character)
             if unicodedata.combining(character):
                 continue
@@ -254,6 +255,11 @@ class InstallerUi:
             else:
                 width += 1
         return width
+
+    def _plainText(self, text: str) -> str:
+        """Remove ANSI colour sequences from text."""
+
+        return re.sub(ANSI_PATTERN_TEXT, "", text)
 
     def _padRight(self, text: str, width: int) -> str:
         """Pad text to a target display width."""
@@ -291,6 +297,12 @@ class InstallerUi:
         columns = shutil.get_terminal_size(fallback=(100, 24)).columns
         return " " * max(0, (columns - width) // 2)
 
+    def _leftPaddingWidth(self, width: int) -> int:
+        """Calculate left padding width for a centered block."""
+
+        columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+        return max(0, (columns - width) // 2)
+
     def _panelLine(self, content: str, width: int) -> str:
         """Format one header panel line."""
 
@@ -300,9 +312,18 @@ class InstallerUi:
         return f"{self._leftPadding(width)}{left} {self._padRight(content, innerWidth)} {right}"
 
     def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
-        """Print one status line with the suffix beside the title."""
+        """Print one status line with the suffix at a fixed terminal column."""
 
-        print(f"\r\033[K{self._stepLine(title, prefix, suffix)}", end="", flush=True)
+        width = self._panelWidth()
+        leftPadding = self._leftPaddingWidth(width)
+        leftText = f"{prefix} {title}" if prefix else f" {title}"
+        suffixWidth = self._displayWidth(suffix)
+        availableWidth = max(1, width - suffixWidth)
+        fittedLeft = self._truncateRight(leftText, availableWidth)
+        suffixColumn = leftPadding + width - suffixWidth + 1
+        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
+        if suffix:
+            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
 
     def _renderSpinner(self) -> None:
         """Render an active step spinner until the step completes."""
@@ -345,11 +366,11 @@ class InstallerUi:
 
         width = self._panelWidth()
         leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixText = f" {suffix}" if suffix else ""
-        suffixWidth = self._displayWidth(suffixText)
+        suffixWidth = self._displayWidth(suffix)
         availableWidth = max(1, width - suffixWidth)
         fittedLeft = self._truncateRight(leftText, availableWidth)
-        return f"{self._leftPadding(width)}{fittedLeft}{suffixText}"
+        paddedLeft = self._padRight(fittedLeft, availableWidth)
+        return f"{self._leftPadding(width)}{paddedLeft}{suffix}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -456,8 +477,11 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--wheel-url",
         dest="wheelUrl",
-        default=os.environ.get("ANSIBLE_RUNNER_WHEEL_URL", DEFAULT_WHEEL_URL),
-        help="Release wheel URL used when --package-spec is not set.",
+        default=os.environ.get("ANSIBLE_RUNNER_WHEEL_URL"),
+        help=(
+            "Release wheel URL used when --package-spec is not set. "
+            "Defaults to the latest GitHub release wheel."
+        ),
     )
     parser.add_argument(
         "--install-from-git",
@@ -502,11 +526,64 @@ def getPackageSpec(args: argparse.Namespace, projectRoot: Path | None = None) ->
         return str(args.packageSpec)
     if not args.installFromGit:
         if projectRoot is not None:
-            localWheel = projectRoot / DEFAULT_WHEEL_NAME
+            localWheel = findLocalWheel(projectRoot)
             if localWheel.is_file():
                 return str(localWheel)
-        return f"{PACKAGE_NAME} @ {args.wheelUrl}"
+        wheelUrl = args.wheelUrl or latestReleaseWheelUrl()
+        return f"{PACKAGE_NAME} @ {wheelUrl}"
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
+
+
+def findLocalWheel(projectRoot: Path) -> Path:
+    """Return the newest local ansibleRunner wheel beside the installer.
+
+    Args:
+        projectRoot: Project root to inspect.
+
+    Returns:
+        Newest matching wheel path, or a non-existent fallback path when none
+        are present.
+    """
+
+    wheels = sorted(
+        projectRoot.glob("ansiblerunner-*-py3-none-any.whl"),
+        key=lambda path: wheelSortKey(path.name),
+        reverse=True,
+    )
+    if wheels:
+        return wheels[0]
+    return projectRoot / "ansiblerunner-*.whl"
+
+
+def wheelSortKey(name: str) -> tuple[int, ...]:
+    """Return a simple numeric sort key for an ansibleRunner wheel filename."""
+
+    match = re.match(r"ansiblerunner-(\d+(?:\.\d+)*)-py3-none-any\.whl$", name)
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def latestReleaseWheelUrl() -> str:
+    """Return the ansibleRunner wheel URL from the latest GitHub release."""
+
+    with urllib.request.urlopen(DEFAULT_RELEASE_API_URL, timeout=30) as response:
+        release = json.loads(response.read().decode("utf-8"))
+    assets = release.get("assets", [])
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        url = str(asset.get("browser_download_url") or "")
+        if (
+            name.startswith("ansiblerunner-")
+            and name.endswith("-py3-none-any.whl")
+            and url
+        ):
+            return url
+    raise SystemExit(
+        "Unable to find ansibleRunner wheel in latest GitHub release assets."
+    )
 
 
 def getInstallLogPath(projectRoot: Path) -> Path:

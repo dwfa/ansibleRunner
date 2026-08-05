@@ -49,13 +49,13 @@ For a project-local install, download the Python installer from GitHub, inspect
 it if desired, then run it from the Ansible project root:
 
 ```shell
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/install.py
+curl -LO https://github.com/dwfa/ansibleRunner/releases/latest/download/install.py
 python3 install.py
 ```
 
 The installer creates `.venv`, installs the `ansibleRunner` release wheel from
-GitHub, installs runtime dependencies including `ansible-core`, and writes
-`ar.py` as a thin project launcher.
+the latest GitHub release, installs runtime dependencies including
+`ansible-core`, and writes `ar.py` as a thin project launcher.
 
 Start the TUI from the Ansible project root:
 
@@ -66,28 +66,31 @@ Start the TUI from the Ansible project root:
 Convenience forms:
 
 ```shell
-curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/install.py | python3 -
+curl -fsSL https://github.com/dwfa/ansibleRunner/releases/latest/download/install.py | python3 -
 ```
 
 ```shell
-python3 <(curl -fsSL https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/install.py)
+python3 <(curl -fsSL https://github.com/dwfa/ansibleRunner/releases/latest/download/install.py)
 ```
 
 If GitHub release downloads are blocked on the target machine, download both
 release files on a machine that has access, copy them to the Ansible project
-root, then run the installer there:
+root, then run the installer there. The wheel asset is the file named like
+`ansiblerunner-<version>-py3-none-any.whl` on the
+[latest release](https://github.com/dwfa/ansibleRunner/releases/latest):
 
 ```shell
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/install.py
-curl -LO https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/ansiblerunner-1.0.4-py3-none-any.whl
+curl -LO https://github.com/dwfa/ansibleRunner/releases/latest/download/install.py
 ```
+
+Then place the downloaded wheel beside `install.py`.
 
 ```shell
 python3 install.py
 ```
 
-When `ansiblerunner-1.0.4-py3-none-any.whl` is beside `install.py`, the
-installer uses that local wheel instead of downloading it from GitHub.
+When an `ansiblerunner-*-py3-none-any.whl` file is beside `install.py`, the
+installer uses the newest local wheel instead of downloading one from GitHub.
 
 The local wheel covers `ansibleRunner` itself. Pip still needs access to
 runtime dependencies such as `ansible-core` and `textual` through its cache, a
@@ -96,13 +99,13 @@ company PyPI mirror, or another configured package source.
 You can also point the installer at a specific local wheel:
 
 ```shell
-python3 install.py --package-spec ./ansiblerunner-1.0.4-py3-none-any.whl
+python3 install.py --package-spec ./ansiblerunner-<version>-py3-none-any.whl
 ```
 
-Install the package directly from GitHub:
+Install the package directly from a downloaded wheel:
 
 ```shell
-python3 -m pip install "ansibleRunner @ https://github.com/dwfa/ansibleRunner/releases/download/v1.0.4/ansiblerunner-1.0.4-py3-none-any.whl"
+python3 -m pip install ./ansiblerunner-<version>-py3-none-any.whl
 ```
 
 Install from a local checkout for testing:

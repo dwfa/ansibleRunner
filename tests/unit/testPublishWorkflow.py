@@ -61,16 +61,19 @@ def testParseArgsSupportsShortMaintainerFlags() -> None:
     assert args.replace_tag is False
 
 
-def testPublishUiKeepsStatusMarkerNearStepText() -> None:
-    """Verify publish status markers are not floated to the panel edge."""
+def testPublishUiAlignsStatusMarkerInStatusColumn() -> None:
+    """Verify publish status markers are aligned away from step text."""
 
     publish = _loadPublishModule()
     ui = publish.PublishUi(spinner=False)
 
     line = ui._stepLine("Validate release inputs", "", "✅")
 
-    assert "Validate release inputs ✅" in line
-    assert "Validate release inputs  ✅" not in line
+    titleEnd = line.index("Validate release inputs") + len("Validate release inputs")
+    markerIndex = line.index("✅")
+
+    assert line.rstrip().endswith("✅")
+    assert markerIndex - titleEnd > 5
 
 
 def testRequireCleanWorktreeRejectsDirtyStatus(
