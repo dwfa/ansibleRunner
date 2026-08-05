@@ -830,7 +830,7 @@ class RunScreen(Container):
         """Return key help for a completed run."""
 
         if self._hasPrettyOutput():
-            return "Enter/Space/Esc back  y copy output"
+            return "Enter/Space/Esc back  y copy output  Fn-drag select Cmd-C copy"
         return "Enter/Space/Esc back"
 
     def _hasPrettyOutput(self) -> bool:

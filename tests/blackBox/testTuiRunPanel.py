@@ -338,6 +338,41 @@ def testTuiRunPanelCopyFallsBackWhenNativeClipboardUnavailable(
     assert not RunScreen._copyTextWithNativeTool("title\nbody")
 
 
+def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
+    tmp_path: Path,
+) -> None:
+    """Verify completed run help shows whole-output and selected-copy options."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "List servers"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {"name": "niceDisplay: Server summary"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "msg": "NAME\n----\ndb1",
+                "task": {"name": "niceDisplay: Server summary"},
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+
+    assert runScreen._completedHelpText() == (
+        "Enter/Space/Esc back  y copy output  Fn-drag select Cmd-C copy"
+    )
+
+
 @pytest.mark.asyncio
 async def testTuiRunPanelRunsSelectedPlaybook(
     tmp_path: Path,
