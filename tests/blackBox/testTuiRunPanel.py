@@ -369,7 +369,7 @@ def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
     runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
 
     assert runScreen._completedHelpText() == (
-        "Enter/Space/Esc back  y copy output  Fn-drag select Cmd-C copy"
+        "Enter/Space/Esc back  y copy output  Fn-drag select ⌘C copy"
     )
 
 
