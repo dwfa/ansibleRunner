@@ -185,10 +185,12 @@ class RunScreen(Container):
         self.run_worker(self._runPlaybook, thread=True)
 
     async def action_back(self) -> None:
-        """Cancel the active run when a back key is pressed."""
+        """Cancel the active run or return after completion."""
 
         if self.running:
             self.action_cancel()
+            return
+        await self.onBack()
 
     async def on_key(self, event: events.Key) -> None:
         """Handle run-screen keys even when a child widget has focus.
@@ -209,6 +211,10 @@ class RunScreen(Container):
             event.stop()
             event.prevent_default()
             await self.action_send_enter()
+        elif event.key == "y" and self._hasPrettyOutput():
+            event.stop()
+            event.prevent_default()
+            self.action_copy_pretty_output()
         elif event.key == "c":
             event.stop()
             event.prevent_default()
@@ -253,6 +259,14 @@ class RunScreen(Container):
             self._appendOutput("Interrupt requested.")
             self.runControl.cancel()
         self.app.exit(return_code=130)
+
+    def action_copy_pretty_output(self) -> None:
+        """Copy visible pretty output blocks to the system clipboard."""
+
+        text = self._prettyOutputClipboardText()
+        if not text:
+            return
+        self.app.copy_to_clipboard(text)
 
     async def action_send_enter(self) -> None:
         """Send input to the active playbook or return after completion."""
@@ -343,7 +357,7 @@ class RunScreen(Container):
         self._finalizeProgress(result)
         status = self.query_one("#run-status", Static)
         helpText = self.query_one("#run-help", Static)
-        helpText.update("Enter/Space back")
+        helpText.update(self._completedHelpText())
         if result.returnCode == 0:
             status.display = True
             status.update(f"Finished: success  elapsed={self._runElapsedText()}")
@@ -572,7 +586,12 @@ class RunScreen(Container):
         body = self._prettyPayloadBody(resultRecord.get("msg"))
         if not title or not body:
             return
-        self.progressParser.recordTaskOutput(taskHeader, title, body)
+        self.progressParser.recordTaskOutput(
+            taskHeader,
+            title,
+            body,
+            hideTaskRow=True,
+        )
 
     @staticmethod
     def _eventResultRecord(
@@ -797,6 +816,28 @@ class RunScreen(Container):
         self.query_one("#run-progress-scroll", VerticalScroll).scroll_end(
             animate=False
         )
+
+    def _completedHelpText(self) -> str:
+        """Return key help for a completed run."""
+
+        if self._hasPrettyOutput():
+            return "Enter/Space/Esc back  y copy output"
+        return "Enter/Space/Esc back"
+
+    def _hasPrettyOutput(self) -> bool:
+        """Return whether the current progress rows include pretty output."""
+
+        return any(row.output is not None for row in self.progressRows)
+
+    def _prettyOutputClipboardText(self) -> str:
+        """Return visible pretty output blocks as plain text."""
+
+        blocks = []
+        for row in self.progressRows:
+            if row.output is None:
+                continue
+            blocks.append(f"{row.output.title}\n{row.output.body}".rstrip())
+        return "\n\n".join(blocks)
 
     def _renderProgress(self) -> Table | Text:
         """Build rich progress renderable for the run panel.

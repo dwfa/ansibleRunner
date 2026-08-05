@@ -42,11 +42,13 @@ class PrettyOutput:
 
     Args:
         body: Preformatted body text.
+        hideTaskRow: Whether the owning task row should be hidden in the tree.
         title: Short output title.
     """
 
     title: str
     body: str
+    hideTaskRow: bool = False
 
 
 @dataclass
@@ -342,12 +344,20 @@ class AnsibleProgressParser:
     ) -> None:
         """Append a task row and any task output blocks."""
 
-        if showTask or task.outputs:
+        hideOutputTaskRow = bool(task.outputs) and all(
+            output.hideTaskRow for output in task.outputs
+        )
+        showOutputTaskRow = any(not output.hideTaskRow for output in task.outputs)
+        if (showTask and not hideOutputTaskRow) or showOutputTaskRow:
             rows.append(self._row(depth, "🔧", task, now, isActive))
         for output in task.outputs:
             rows.append(
                 ProgressRow(
-                    depth=depth + 1,
+                    depth=(
+                        depth + 1
+                        if (showTask and not hideOutputTaskRow) or showOutputTaskRow
+                        else depth
+                    ),
                     duration=0.0,
                     icon="",
                     name="",
@@ -447,11 +457,18 @@ class AnsibleProgressParser:
             return
         self.currentPlay.interactions.append(interaction)
 
-    def recordTaskOutput(self, taskHeader: str, title: str, body: str) -> None:
+    def recordTaskOutput(
+        self,
+        taskHeader: str,
+        title: str,
+        body: str,
+        hideTaskRow: bool = False,
+    ) -> None:
         """Record a human-friendly output block for a task.
 
         Args:
             body: Preformatted output body.
+            hideTaskRow: Whether to suppress the owning task row in display rows.
             taskHeader: Ansible task header in optional ``role : task`` form.
             title: Short block title.
         """
@@ -459,7 +476,9 @@ class AnsibleProgressParser:
         targetTask = self._findTaskByHeader(taskHeader)
         if targetTask is None:
             return
-        targetTask.outputs.append(PrettyOutput(title=title, body=body))
+        targetTask.outputs.append(
+            PrettyOutput(title=title, body=body, hideTaskRow=hideTaskRow)
+        )
 
     @staticmethod
     def _row(

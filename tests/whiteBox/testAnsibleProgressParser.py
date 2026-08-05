@@ -130,6 +130,30 @@ def testParserShowsPrettyTaskOutputAtRoleLevel() -> None:
     ]
 
 
+def testParserCanHidePrettyOutputTaskRow() -> None:
+    """Verify marked pretty output can render without its owning task row."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [List servers] ****************", now=1.0)
+    parser.processLine("TASK [niceDisplay: Server summary] *****", now=2.0)
+    parser.recordTaskOutput(
+        "niceDisplay: Server summary",
+        "Server summary",
+        "NAME\n----\ndb1",
+        hideTaskRow=True,
+    )
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.icon, row.name, row.output is not None) for row in rows] == [
+        ("🎭", "List servers", False),
+        ("", "", True),
+    ]
+
+
 def testParserFinalizesCompletedRoleTaskAndPlay() -> None:
     """Verify completed rows have succeeded status and durations."""
 

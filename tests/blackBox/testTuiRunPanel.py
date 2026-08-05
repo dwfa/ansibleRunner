@@ -212,11 +212,17 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
     renderedProgress = _renderRich(runScreen._renderProgress())
 
-    assert "niceDisplay: Postgres Flexible Servers" in renderedProgress
+    assert "niceDisplay:" not in renderedProgress
     assert "Postgres Flexible Servers matching cei-aztest- (1 found)" in renderedProgress
     assert "NAME  LOCATION" in renderedProgress
     assert "db1   East US" in renderedProgress
     assert "msg:" not in renderedProgress
+    assert runScreen._prettyOutputClipboardText() == (
+        "Postgres Flexible Servers matching cei-aztest- (1 found)\n"
+        "NAME  LOCATION\n"
+        "----  --------\n"
+        "db1   East US"
+    )
 
 
 def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
@@ -283,8 +289,7 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
         (0, "🎭", "Test a few roles", False),
         (1, "⚙", "ping", False),
         (2, "🔧", "ping", False),
-        (1, "🔧", "niceDisplay: Sample table output", False),
-        (2, "", "", True),
+        (1, "", "", True),
     ]
 
 
@@ -331,7 +336,7 @@ async def testTuiRunPanelRunsSelectedPlaybook(
         assert str(runTitle.content) == "site web"
         assert str(runStatus.content).startswith("Finished: success  elapsed=")
         assert not runFailure.display
-        assert str(runHelp.content) == "Enter/Space back"
+        assert str(runHelp.content) == "Enter/Space/Esc back"
         assert runProgressScroll.id == "run-progress-scroll"
         renderedProgress = _renderRich(runProgress.content)
 
@@ -578,6 +583,35 @@ async def testTuiRunPanelSpaceReturnsAfterCompletedRun(
         )
 
         await pilot.press("space")
+
+        assert pilot.app.query_one("#launch-menu", LaunchScreen)
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelEscapeReturnsAfterCompletedRun(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify Escape returns to launch after a completed run."""
+
+    _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        assert str(pilot.app.query_one("#run-status", Static).content).startswith(
+            "Finished: success  elapsed="
+        )
+
+        await pilot.press("escape")
 
         assert pilot.app.query_one("#launch-menu", LaunchScreen)
 
