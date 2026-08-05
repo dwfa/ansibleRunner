@@ -219,11 +219,12 @@ output without changing normal Ansible execution.
 Use `waitForInput.yaml` for continue prompts and `promptForInput.yaml` for text
 input prompts. The wrapper task name can be whatever reads well in the playbook;
 the include target and native Ansible prompt text determine how the TUI handles
-the prompt.
+the prompt. The wrapper files can live wherever the Ansible project keeps
+shared task files.
 
 ```yaml
 - name: "Confirm delete"
-  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/waitForInput.yaml"
+  ansible.builtin.include_tasks: "path/to/waitForInput.yaml"
   vars:
     title: "Confirm delete"
     prompt: |
@@ -233,7 +234,7 @@ the prompt.
 
 ```yaml
 - name: "Enter server alias"
-  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/promptForInput.yaml"
+  ansible.builtin.include_tasks: "path/to/promptForInput.yaml"
   vars:
     title: "Enter server alias"
     prompt: |
@@ -259,7 +260,7 @@ title.
 
 ```yaml
 - name: "deprovisionDB complete"
-  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/niceDisplay.yaml"
+  ansible.builtin.include_tasks: "path/to/niceDisplay.yaml"
   vars:
     title: "deprovisionDB complete"
     msg: |
@@ -276,6 +277,44 @@ Display rules:
 - If the same role has completed prompt interactions, those prompt rows are not
   appended below the boxed display block.
 - Press `y` to copy the full boxed output block.
+
+### Wrapper Task Files
+
+These are minimal wrapper task file examples that projects can copy and adapt.
+
+`waitForInput.yaml`:
+
+```yaml
+---
+- name: "wait for user input"
+  ansible.builtin.pause:
+    prompt: "{{ prompt | default(title | default('Press Enter to continue')) }}"
+    echo: true
+```
+
+`promptForInput.yaml`:
+
+```yaml
+---
+- name: "prompt for user input"
+  ansible.builtin.pause:
+    prompt: "{{ prompt | default(title | default('Enter value')) }}"
+    echo: true
+  register: promptInput
+
+- name: "set prompted value"
+  ansible.builtin.set_fact:
+    promptValue: "{{ promptInput.user_input | default('') }}"
+```
+
+`niceDisplay.yaml`:
+
+```yaml
+---
+- name: "show display output"
+  ansible.builtin.debug:
+    msg: "{{ msg | default(display | default(body | default(''))) }}"
+```
 
 ## Direct CLI
 
