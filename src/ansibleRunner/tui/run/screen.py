@@ -63,6 +63,10 @@ PRETTY_OUTPUT_PREFIXES = {
     # Prefix dispatch point for future wrappers such as nicePrompt/niceProgress.
     "nicedisplay:": "display",
 }
+PROMPT_TITLE_PREFIXES = {
+    "niceprompt:": "text",
+    "nicewait:": "continue",
+}
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
     "aborted": "■",
@@ -695,6 +699,9 @@ class RunScreen(Container):
         taskName = str(task.get("name") or "")
         if " : " in taskName:
             taskName = taskName.split(" : ", 1)[1]
+        promptTitle = self._promptTitleFromTaskName(taskName)
+        if promptTitle is not None:
+            return promptTitle or self._defaultPromptMessage(mode)
         if taskName:
             return taskName
         return self._defaultPromptMessage(mode)
@@ -731,9 +738,19 @@ class RunScreen(Container):
         taskName = taskParts[-1]
         normalizedTask = taskName.lower()
         isPauseRole = roleName == "pause"
+        promptTitle = self._promptTitleFromTaskName(taskName)
+        promptTitleMode = self._promptModeFromTaskName(taskName)
         isPromptInclude = self._isContinuePromptInclude(roleName, normalizedTask)
         isPromptTask = "wait for user input" in normalizedTask
         isTextPromptTask = self._isTextPromptTask(roleName, normalizedTask)
+        if promptTitleMode is not None and not isPromptTask and not isTextPromptTask:
+            self.pendingPromptMessage = (
+                promptTitle
+                if promptTitle is not None
+                else self._defaultPromptMessage(promptTitleMode)
+            )
+            self.pendingPromptMode = promptTitleMode
+            return
         if isPauseRole and isPromptInclude and not isPromptTask:
             self.pendingPromptMessage = taskName
             self.pendingPromptMode = "continue"
@@ -987,8 +1004,9 @@ class RunScreen(Container):
         if self.activePromptMessage is None:
             return
         duration = monotonic() - self.activePromptStart
+        promptMessage = self.activePromptMessage
         self.progressParser.recordInteraction(
-            self.activePromptMessage,
+            self._promptInteractionSummary(promptMessage),
             value,
             duration,
             aborted=aborted,
@@ -996,7 +1014,7 @@ class RunScreen(Container):
         )
         if not aborted and not failed:
             self.pendingSyntheticTaskAfterPrompt = self._syntheticTaskAfterPrompt(
-                self.activePromptMessage
+                promptMessage
             )
         if self.activePromptFromInclude:
             self.suppressNextPromptTask = True
@@ -1137,9 +1155,9 @@ class RunScreen(Container):
             payload = self._ansibleLogPayload(line)
             if not self._isPromptMarker(payload):
                 continue
-            promptLine = self._nextPromptLogLine(lines[index + 1 :])
-            if promptLine:
-                return promptLine
+            promptMessage = self._nextPromptLogMessage(lines[index + 1 :])
+            if promptMessage:
+                return promptMessage
             return None
         return None
 
@@ -1153,17 +1171,19 @@ class RunScreen(Container):
         return line.strip()
 
     @classmethod
-    def _nextPromptLogLine(cls, lines: list[str]) -> str | None:
-        """Return the prompt text after a native Ansible prompt marker."""
+    def _nextPromptLogMessage(cls, lines: list[str]) -> str | None:
+        """Return prompt text lines after a native Ansible prompt marker."""
 
+        promptLines: list[str] = []
         for line in lines:
-            payload = cls._ansibleLogPayload(line)
-            if not payload:
-                continue
             if ANSIBLE_LOG_RECORD_PATTERN.match(line):
-                return None
-            return cls._cleanPromptMessage(payload)
-        return None
+                break
+            payload = cls._ansibleLogPayload(line)
+            if not payload and not promptLines:
+                continue
+            promptLines.append(cls._cleanPromptMessage(payload))
+        message = "\n".join(promptLines).strip()
+        return message or None
 
     @staticmethod
     def _isPromptMarker(payload: str) -> bool:
@@ -1182,7 +1202,38 @@ class RunScreen(Container):
     def _cleanPromptMessage(message: str) -> str:
         """Normalize Ansible prompt text for compact display."""
 
-        return re.sub(r"\s+\(output is hidden\):?$", "", message).rstrip(":").strip()
+        return re.sub(r"\s+\(output is hidden\):?$", "", message).strip()
+
+    @staticmethod
+    def _promptInteractionSummary(message: str) -> str:
+        """Return a compact one-line prompt message for progress rows."""
+
+        for line in message.splitlines():
+            summary = line.strip()
+            if summary:
+                return summary
+        return message.strip()
+
+    @classmethod
+    def _promptTitleFromTaskName(cls, taskName: str) -> str | None:
+        """Return the title after a nice prompt task prefix, when present."""
+
+        strippedName = taskName.strip()
+        normalizedName = strippedName.lower()
+        for prefix in PROMPT_TITLE_PREFIXES:
+            if normalizedName.startswith(prefix):
+                return strippedName[len(prefix) :].strip()
+        return None
+
+    @classmethod
+    def _promptModeFromTaskName(cls, taskName: str) -> PromptMode | None:
+        """Return the prompt mode implied by a nice prompt task prefix."""
+
+        normalizedName = taskName.strip().lower()
+        for prefix, mode in PROMPT_TITLE_PREFIXES.items():
+            if normalizedName.startswith(prefix):
+                return cast(PromptMode, mode)
+        return None
 
     @staticmethod
     def _isTextPromptTask(roleName: str, normalizedTask: str) -> bool:

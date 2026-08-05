@@ -204,6 +204,11 @@ the progress panel.
   back to the bottom.
 - After a run completes, press `Enter`, `Space`, or `Esc` to return to the
   launch screen.
+- Wrapper tasks named `niceWait: <title>` or `nicePrompt: <title>` use the
+  title as the fallback prompt text for `waitForInput.yaml` and
+  `promptForInput.yaml`. Native Ansible `waitMsg` / `promptMsg` text from the
+  log still wins when present, and multiline prompt text is preserved in the
+  prompt panel.
 - Tasks named `niceDisplay: <title>` render their `msg` payload as a boxed
   display block. The internal `niceDisplay:` task row is hidden from the
   progress tree.

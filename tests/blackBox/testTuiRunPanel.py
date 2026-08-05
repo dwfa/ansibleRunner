@@ -1095,6 +1095,83 @@ async def testTuiRunPanelDetectsCustomWaitPromptInclude(
 
 
 @pytest.mark.asyncio
+async def testTuiRunPanelUsesNiceWaitTitle(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify niceWait include titles are used for continue prompts."""
+
+    _writeNiceWaitFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForActivePrompt(pilot)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptMessage = pilot.app.query_one("#run-prompt-message", Static)
+        promptInput = pilot.app.query_one("#run-prompt-input", Input)
+
+        assert runScreen.activePromptMessage == "Attach external device"
+        assert runScreen.activePromptMode == "continue"
+        assert str(promptMessage.content) == "Attach external device"
+        assert not promptInput.display
+
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        renderedProgress = _renderRich(
+            pilot.app.query_one("#run-progress", Static).content
+        )
+        assert "Attach external device — continued" in renderedProgress
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelUsesNicePromptTitle(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify nicePrompt include titles are used for text prompts."""
+
+    _writeNicePromptFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForActivePrompt(pilot)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptMessage = pilot.app.query_one("#run-prompt-message", Static)
+        promptInput = pilot.app.query_one("#run-prompt-input", Input)
+
+        assert runScreen.activePromptMessage == "Enter DHCP address"
+        assert runScreen.activePromptMode == "text"
+        assert str(promptMessage.content) == "Enter DHCP address"
+        assert promptInput.display
+
+        await pilot.press("1")
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        renderedProgress = _renderRich(
+            pilot.app.query_one("#run-progress", Static).content
+        )
+        assert "Enter DHCP address — continued" in renderedProgress
+
+
+@pytest.mark.asyncio
 async def testTuiRunPanelStartsPromptFromCallbackEvent(
     tmp_path: Path,
     monkeypatch: Any,
@@ -1204,6 +1281,51 @@ async def testTuiRunPanelRendersBracketedPromptTextLiterally(
         await pilot.pause(0.5)
 
         assert runScreen.activePromptMessage is None
+
+
+@pytest.mark.asyncio
+async def testTuiRunPanelRendersMultilinePromptText(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify multiline waitMsg/promptMsg text is preserved in the prompt panel."""
+
+    _writeMultilineWaitFakeAnsible(tmp_path, monkeypatch)
+    createPlaybook(tmp_path)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    savePlaybookConfigs(
+        defaults.stateDir / "playbookConfig.json",
+        {"site-pb": PlaybookConfig(node="web")},
+    )
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await waitForActivePrompt(pilot)
+
+        runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptMessage = pilot.app.query_one("#run-prompt-message", Static)
+
+        expectedMessage = (
+            "WARNING: About to write image to device.\n"
+            "Device: /dev/sda\n"
+            "Press Enter to continue."
+        )
+        assert runScreen.activePromptMessage == expectedMessage
+        assert isinstance(promptMessage.content, Text)
+        assert promptMessage.content.plain == expectedMessage
+
+        await pilot.press("enter")
+        await waitForRunComplete(pilot)
+
+        renderedProgress = _renderRich(
+            pilot.app.query_one("#run-progress", Static).content
+        )
+        assert (
+            "WARNING: About to write image to device. — continued"
+            in renderedProgress
+        )
+        assert "Device: /dev/sda — continued" not in renderedProgress
 
 
 @pytest.mark.asyncio
@@ -1601,6 +1723,60 @@ def _writeCustomWaitIncludeFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None
     monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
 
 
+def _writeNiceWaitFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook with a niceWait prompt wrapper."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import sys
+
+            print("PLAY [Prompt play] ********", flush=True)
+            print("\\033[0;35mTASK [pause : niceWait: Attach external device] ********\\033[0m", flush=True)
+            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
+            sys.stdin.readline()
+            print("ok: [localhost]", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeNicePromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook with a nicePrompt prompt wrapper."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import sys
+
+            print("PLAY [Prompt play] ********", flush=True)
+            print("\\033[0;35mTASK [promptForInput : nicePrompt: Enter DHCP address] ********\\033[0m", flush=True)
+            print("included: tasks/misc/promptForInput.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [promptForInput : prompt for user input] ********\\033[0m", flush=True)
+            sys.stdin.readline()
+            print("ok: [localhost]", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
 def _writeBracketedPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
     """Write a fake ansible-playbook with bracketed prompt text."""
 
@@ -1627,6 +1803,43 @@ def _writeBracketedPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
                 with open(log_path, "a", encoding="utf-8") as log:
                     print("2026-08-01 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : wait for user input]", file=log)
                     print(f"{prompt} (output is hidden):", file=log, flush=True)
+            print("[createRPiImage : wait for user input]", flush=True)
+            sys.stdin.readline()
+            print("\\033[0;35mTASK [createRPiImage : write image] ********\\033[0m", flush=True)
+            print("ok: [192.168.128.16]", flush=True)
+            sys.exit(0)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
+
+
+def _writeMultilineWaitFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook with a multiline native wait prompt."""
+
+    binDir = tmp_path / "bin"
+    binDir.mkdir()
+    executable = binDir / "ansible-playbook"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + dedent(
+            """
+            import os
+            import sys
+
+            print("PLAY [Create RPi Image] ********", flush=True)
+            print("\\033[0;35mTASK [createRPiImage : niceWait: Confirm write] ********\\033[0m", flush=True)
+            print("included: /tmp/tasks/misc/waitForInput.yaml for 192.168.128.16", flush=True)
+            log_path = os.environ.get("ANSIBLE_LOG_PATH")
+            if log_path:
+                with open(log_path, "a", encoding="utf-8") as log:
+                    print("2026-08-05 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : wait for user input]", file=log)
+                    print("WARNING: About to write image to device.", file=log)
+                    print("Device: /dev/sda", file=log)
+                    print("Press Enter to continue. (output is hidden):", file=log, flush=True)
+                    print("2026-08-05 20:20:25,015 p=1 u=test n=ansible INFO| next log record", file=log, flush=True)
             print("[createRPiImage : wait for user input]", flush=True)
             sys.stdin.readline()
             print("\\033[0;35mTASK [createRPiImage : write image] ********\\033[0m", flush=True)
