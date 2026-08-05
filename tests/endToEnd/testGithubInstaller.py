@@ -44,14 +44,15 @@ def testPackageSpecDefaultsToLatestReleaseWheel(monkeypatch: Any) -> None:
 
 
 def testPackageSpecUsesExplicitWheel(tmp_path: Path) -> None:
-    """Verify -w/--whl uses the requested wheel directly."""
+    """Verify -w/--whl is shorthand for --package-spec."""
 
     installer = _loadInstallerModule()
     wheelPath = tmp_path / "ansiblerunner-1.0.5-py3-none-any.whl"
     wheelPath.write_text("wheel\n", encoding="utf-8")
     args = installer.parseArgs(["-w", str(wheelPath)])
 
-    assert installer.getPackageSpec(args) == str(wheelPath.resolve())
+    assert args.packageSpec == str(wheelPath)
+    assert installer.getPackageSpec(args) == str(wheelPath)
 
 
 def testPackageSpecFindsWheelBesideInstaller(tmp_path: Path) -> None:

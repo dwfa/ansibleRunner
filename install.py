@@ -483,18 +483,6 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "-w",
-        "--whl",
-        dest="wheelPath",
-        type=Path,
-        default=(
-            Path(os.environ["ANSIBLE_RUNNER_WHL"])
-            if "ANSIBLE_RUNNER_WHL" in os.environ
-            else None
-        ),
-        help="Local ansibleRunner wheel file to install before checking GitHub.",
-    )
-    parser.add_argument(
         "--install-from-git",
         dest="installFromGit",
         action="store_true",
@@ -502,10 +490,18 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Install from the Git repository instead of the release wheel.",
     )
     parser.add_argument(
+        "-w",
+        "--whl",
         "--package-spec",
         dest="packageSpec",
-        default=os.environ.get("ANSIBLE_RUNNER_PACKAGE_SPEC"),
-        help="Full pip package spec override, for forks or local testing.",
+        default=os.environ.get(
+            "ANSIBLE_RUNNER_PACKAGE_SPEC",
+            os.environ.get("ANSIBLE_RUNNER_WHL"),
+        ),
+        help=(
+            "Full pip package spec override. Use -w/--whl as shorthand for "
+            "a local wheel file."
+        ),
     )
     parser.add_argument(
         "--launcher-name",
@@ -539,8 +535,6 @@ def getPackageSpec(
     if args.packageSpec:
         return str(args.packageSpec)
     if not args.installFromGit:
-        if args.wheelPath is not None:
-            return str(args.wheelPath.expanduser().resolve())
         localWheel = findLocalWheel(installerRoot)
         if localWheel is not None:
             return str(localWheel)

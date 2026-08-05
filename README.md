@@ -102,8 +102,9 @@ You can also point the installer at a specific local wheel:
 python3 install.py -w ./ansiblerunner-<version>-py3-none-any.whl
 ```
 
-Use `--package-spec` only when you need to pass a full custom pip package spec,
-such as a fork, checkout, or test artifact.
+`-w` and `--whl` are shorthand for `--package-spec`. Use `--package-spec`
+directly when you want to pass a full custom pip package spec, such as a fork,
+checkout, or test artifact.
 
 Install the package directly from a downloaded wheel:
 
