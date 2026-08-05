@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import stat
 import subprocess
@@ -53,6 +54,58 @@ def testPackageSpecPrefersNewestProjectLocalWheel(tmp_path: Path) -> None:
     args = installer.parseArgs([])
 
     assert installer.getPackageSpec(args, tmp_path) == str(wheelPath)
+
+
+def testLatestReleaseWheelUrlPrefersHighestWheelVersion(monkeypatch: Any) -> None:
+    """Verify remote release selection uses wheel version, not release order."""
+
+    installer = _loadInstallerModule()
+    releases = [
+        {
+            "assets": [
+                {
+                    "name": "ansiblerunner-1.0.4-py3-none-any.whl",
+                    "browser_download_url": "https://example.test/1.0.4.whl",
+                }
+            ]
+        },
+        {
+            "assets": [
+                {
+                    "name": "ansiblerunner-1.0.10-py3-none-any.whl",
+                    "browser_download_url": "https://example.test/1.0.10.whl",
+                }
+            ]
+        },
+        {
+            "assets": [
+                {
+                    "name": "install.py",
+                    "browser_download_url": "https://example.test/install.py",
+                }
+            ]
+        },
+    ]
+
+    class FakeResponse:
+        """Small context manager matching urllib response behavior."""
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(releases).encode("utf-8")
+
+    monkeypatch.setattr(
+        installer.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    assert installer.latestReleaseWheelUrl() == "https://example.test/1.0.10.whl"
 
 
 def testPackageSpecCanInstallFromGit() -> None:

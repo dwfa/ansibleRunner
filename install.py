@@ -43,9 +43,7 @@ from pathlib import Path
 PACKAGE_NAME = "ansibleRunner"
 DEFAULT_REPO_URL = "https://github.com/dwfa/ansibleRunner.git"
 DEFAULT_REF = "main"
-DEFAULT_RELEASE_API_URL = (
-    "https://api.github.com/repos/dwfa/ansibleRunner/releases/latest"
-)
+DEFAULT_RELEASES_API_URL = "https://api.github.com/repos/dwfa/ansibleRunner/releases"
 DEFAULT_LAUNCHER_NAME = "ar.py"
 GREEN_COLOUR = "\033[38;5;46m"
 MAUVE_COLOUR = "\033[38;5;213m"
@@ -565,24 +563,27 @@ def wheelSortKey(name: str) -> tuple[int, ...]:
 
 
 def latestReleaseWheelUrl() -> str:
-    """Return the ansibleRunner wheel URL from the latest GitHub release."""
+    """Return the newest ansibleRunner wheel URL by parsed wheel version."""
 
-    with urllib.request.urlopen(DEFAULT_RELEASE_API_URL, timeout=30) as response:
-        release = json.loads(response.read().decode("utf-8"))
-    assets = release.get("assets", [])
-    for asset in assets:
-        if not isinstance(asset, dict):
+    with urllib.request.urlopen(DEFAULT_RELEASES_API_URL, timeout=30) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+
+    candidates: list[tuple[tuple[int, ...], str]] = []
+    for release in releases:
+        if not isinstance(release, dict):
             continue
-        name = str(asset.get("name") or "")
-        url = str(asset.get("browser_download_url") or "")
-        if (
-            name.startswith("ansiblerunner-")
-            and name.endswith("-py3-none-any.whl")
-            and url
-        ):
-            return url
+        for asset in release.get("assets", []):
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "")
+            url = str(asset.get("browser_download_url") or "")
+            version = wheelSortKey(name)
+            if version and url:
+                candidates.append((version, url))
+    if candidates:
+        return max(candidates, key=lambda candidate: candidate[0])[1]
     raise SystemExit(
-        "Unable to find ansibleRunner wheel in latest GitHub release assets."
+        "Unable to find ansibleRunner wheel in GitHub release assets."
     )
 
 
