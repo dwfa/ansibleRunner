@@ -110,6 +110,7 @@ class InstallerUi:
             title: Step title.
         """
 
+        self.finishStep()
         self.activeStep = title
         self.activeStepHadSubsteps = False
         self.activeStepPrinted = False
@@ -177,7 +178,8 @@ class InstallerUi:
             launcherPath: Generated project launcher path.
         """
 
-        print(self._stepLine("🎉 Install complete", " ", self._green("✅")), flush=True)
+        self.finishStep()
+        print(self._stepLine("🎉 Install complete", "", self._green("✅")), flush=True)
         self.substep(f"Launcher: {launcherPath}")
         self.substep(f"Run: {launcherPath}")
 
@@ -188,7 +190,8 @@ class InstallerUi:
             message: Failure message.
         """
 
-        print(self._stepLine(message, " ", "❌"), flush=True)
+        self.finishStep(False)
+        print(self._stepLine(message, "", "❌"), flush=True)
         self.substep(f"See log: {self.logPath}")
 
     def hideCursor(self) -> None:
@@ -297,18 +300,9 @@ class InstallerUi:
         return f"{self._leftPadding(width)}{left} {self._padRight(content, innerWidth)} {right}"
 
     def _printTtyStatusLine(self, title: str, prefix: str, suffix: str = "") -> None:
-        """Print one status line with a fixed right-side suffix column."""
+        """Print one status line with the suffix beside the title."""
 
-        width = self._panelWidth()
-        leftPadding = len(self._leftPadding(width))
-        leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixWidth = self._displayWidth(suffix)
-        availableWidth = max(1, width - suffixWidth)
-        fittedLeft = self._truncateRight(leftText, availableWidth)
-        suffixColumn = leftPadding + width - suffixWidth + 1
-        print(f"\r\033[K{' ' * leftPadding}{fittedLeft}", end="", flush=True)
-        if suffix:
-            print(f"\033[{suffixColumn}G{suffix}", end="", flush=True)
+        print(f"\r\033[K{self._stepLine(title, prefix, suffix)}", end="", flush=True)
 
     def _renderSpinner(self) -> None:
         """Render an active step spinner until the step completes."""
@@ -351,10 +345,11 @@ class InstallerUi:
 
         width = self._panelWidth()
         leftText = f"{prefix} {title}" if prefix else f" {title}"
-        suffixWidth = self._displayWidth(suffix)
+        suffixText = f" {suffix}" if suffix else ""
+        suffixWidth = self._displayWidth(suffixText)
         availableWidth = max(1, width - suffixWidth)
         fittedLeft = self._truncateRight(leftText, availableWidth)
-        return f"{self._leftPadding(width)}{self._padRight(fittedLeft, availableWidth)}{suffix}"
+        return f"{self._leftPadding(width)}{fittedLeft}{suffixText}"
 
 
 def main(argv: list[str] | None = None) -> int:

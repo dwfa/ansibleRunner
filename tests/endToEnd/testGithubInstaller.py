@@ -69,6 +69,18 @@ def testPackageSpecCanBeOverridden() -> None:
     assert installer.getPackageSpec(args) == "/tmp/ansibleRunner"
 
 
+def testInstallerUiKeepsStatusMarkerNearStepText() -> None:
+    """Verify installer status markers are not floated to the panel edge."""
+
+    installer = _loadInstallerModule()
+    ui = installer.InstallerUi(Path("/tmp/install.log"))
+
+    line = ui._stepLine("Install ansibleRunner", "", "✅")
+
+    assert "Install ansibleRunner ✅" in line
+    assert "Install ansibleRunner  ✅" not in line
+
+
 def testEnsureVenvCreatesMissingEnvironment(monkeypatch: Any, tmp_path: Path) -> None:
     """Verify the installer creates a missing project virtual environment."""
 
