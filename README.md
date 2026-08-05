@@ -206,9 +206,10 @@ the progress panel.
   launch screen.
 - Wrapper tasks named `niceWait: <title>` or `nicePrompt: <title>` use the
   title as the fallback prompt text for `waitForInput.yaml` and
-  `promptForInput.yaml`. Native Ansible `waitMsg` / `promptMsg` text from the
-  log still wins when present, and multiline prompt text is preserved in the
-  prompt panel.
+  `promptForInput.yaml`. Prompt wrappers should prefer `title:` for the short
+  label and `prompt:` for the full prompt body. Native Ansible prompt text from
+  the log still wins when present, and multiline prompt text is preserved in
+  the prompt panel.
 - Tasks named `niceDisplay: <title>` render their `msg` payload as a boxed
   display block. The internal `niceDisplay:` task row is hidden from the
   progress tree.

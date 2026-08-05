@@ -1288,7 +1288,7 @@ async def testTuiRunPanelRendersMultilinePromptText(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify multiline waitMsg/promptMsg text is preserved in the prompt panel."""
+    """Verify multiline prompt text is preserved in the prompt panel."""
 
     _writeMultilineWaitFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
