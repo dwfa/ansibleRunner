@@ -22,6 +22,13 @@
   `promptHidden: true`, so playbooks can request password-style masking for
   sensitive interactive values without making ordinary prompts harder to use.
 
+- Audit and clarify run pipeline separation of concerns.
+  Review `RunScreen`, callback/stdout processing, prompt/display wrapper
+  interception, progress mutation, input handling, and rendering boundaries.
+  Identify where responsibilities are mixed, then split the highest-risk areas
+  into explicit components so detection/interception, execution, state updates,
+  and Textual rendering can be tested independently.
+
 ## P2
 
 - Support orchestrator playbooks with phase-specific target variables.

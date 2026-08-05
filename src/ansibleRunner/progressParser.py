@@ -285,8 +285,9 @@ class AnsibleProgressParser:
         rows.append(self._row(0, "🎭", play, now, isActive))
         if self.outputLevel == "play":
             return
-        for interaction in play.interactions:
-            rows.append(self._row(1, "💬", interaction, now, False))
+        if self.outputLevel == "task" or not self._hasVisibleTaskOutput(play):
+            for interaction in play.interactions:
+                rows.append(self._row(1, "💬", interaction, now, False))
         for role in play.roles:
             rows.append(self._row(1, "⚙", role, now, False))
             if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
@@ -299,8 +300,9 @@ class AnsibleProgressParser:
                         False,
                         showTask=self.outputLevel == "task",
                     )
-            for interaction in role.interactions:
-                rows.append(self._row(2, "💬", interaction, now, False))
+            if self.outputLevel == "task" or not self._hasVisibleTaskOutput(role):
+                for interaction in role.interactions:
+                    rows.append(self._row(2, "💬", interaction, now, False))
         if isActive and self.currentRole is not None:
             rows.append(self._row(1, "⚙", self.currentRole, now, True))
             if self.outputLevel == "task" or self._hasVisibleTaskOutput(
@@ -315,13 +317,37 @@ class AnsibleProgressParser:
                         False,
                         showTask=self.outputLevel == "task",
                     )
-            for interaction in self.currentRole.interactions:
-                rows.append(self._row(2, "💬", interaction, now, False))
-            if self.currentTask is not None and self._taskIsVisible(self.currentTask):
-                self._appendTaskRows(rows, 2, self.currentTask, now, True)
+            if self.outputLevel == "task" or not self._hasVisibleTaskOutput(
+                self.currentRole
+            ):
+                for interaction in self.currentRole.interactions:
+                    rows.append(self._row(2, "💬", interaction, now, False))
+            if (
+                self.currentTask is not None
+                and self._taskIsVisible(self.currentTask)
+                and (self.outputLevel == "task" or bool(self.currentTask.outputs))
+            ):
+                self._appendTaskRows(
+                    rows,
+                    2,
+                    self.currentTask,
+                    now,
+                    True,
+                    showTask=self.outputLevel == "task",
+                )
         elif isActive and self.currentTask is not None:
-            if self._taskIsVisible(self.currentTask):
-                self._appendTaskRows(rows, 1, self.currentTask, now, True)
+            if (
+                self._taskIsVisible(self.currentTask)
+                and (self.outputLevel == "task" or bool(self.currentTask.outputs))
+            ):
+                self._appendTaskRows(
+                    rows,
+                    1,
+                    self.currentTask,
+                    now,
+                    True,
+                    showTask=self.outputLevel == "task",
+                )
         if self.outputLevel == "task" or self._hasVisibleTaskOutput(play):
             for task in play.tasks:
                 self._appendTaskRows(

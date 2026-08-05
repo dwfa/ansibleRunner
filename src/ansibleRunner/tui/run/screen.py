@@ -59,10 +59,6 @@ TASK_HEADER_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 ANSIBLE_LOG_RECORD_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} .+? INFO\| (.*)$")
 EVENT_LOG_PREFIX = "Event log: "
 RUN_LOG_PREFIX = "Logging to "
-PRETTY_OUTPUT_PREFIXES = {
-    # Prefix dispatch point for future wrappers such as nicePrompt/niceProgress.
-    "nicedisplay:": "display",
-}
 PROMPT_TITLE_PREFIXES = {
     "niceprompt:": "text",
     "nicewait:": "continue",
@@ -133,6 +129,7 @@ class RunScreen(Container):
         self.activePromptStart: float = 0.0
         self.pendingPromptMessage: str | None = None
         self.pendingPromptMode: PromptMode | None = None
+        self.pendingPrettyOutputTitle: str | None = None
         self.pendingSyntheticTaskAfterPrompt: tuple[str, set[str]] | None = None
         self.eventLogOffset = 0
         self.eventLogPath: Path | None = None
@@ -399,6 +396,7 @@ class RunScreen(Container):
                 self._recordPromptInteraction("aborted", aborted=True)
             self.pendingPromptMessage = None
             self.pendingPromptMode = None
+            self.pendingPrettyOutputTitle = None
             self.pendingSyntheticTaskAfterPrompt = None
             self.suppressNextPromptResult = False
             self.suppressNextPromptTask = False
@@ -411,6 +409,7 @@ class RunScreen(Container):
                     self._recordPromptInteraction("failed", failed=True)
             self.pendingPromptMessage = None
             self.pendingPromptMode = None
+            self.pendingPrettyOutputTitle = None
             self.pendingSyntheticTaskAfterPrompt = None
             self.suppressNextPromptResult = False
             self.suppressNextPromptTask = False
@@ -454,6 +453,7 @@ class RunScreen(Container):
             if self.progressParser.currentTask is not None
             else None
         )
+        self._detectPrettyOutputInclude(cleanLine)
         self.progressParser.processLine(cleanLine, now)
         if resultMatch and resultMatch.group(1) in {"ok", "changed"}:
             self._startSyntheticTaskAfterResult(
@@ -516,6 +516,11 @@ class RunScreen(Container):
                         now,
                     )
             return
+        if eventName == "include":
+            include = eventRecord.get("include")
+            if isinstance(include, dict):
+                self._processIncludeEvent(include)
+            return
         if eventName in {
             "runner_ok",
             "runner_failed",
@@ -531,6 +536,9 @@ class RunScreen(Container):
             return
         task = eventRecord.get("task")
         if not isinstance(task, dict):
+            return
+        if self._isNiceDisplayIncludeTask(task):
+            self.pendingPrettyOutputTitle = self._niceDisplayTitleFromTask(task)
             return
         if self._isStructuralIncludeTask(task):
             return
@@ -551,6 +559,18 @@ class RunScreen(Container):
             if "prompt for user input" in taskName:
                 self._startPromptFromEvent(task, "text")
 
+    def _processIncludeEvent(self, include: dict[str, object]) -> None:
+        """Process one structured include callback event."""
+
+        filename = str(include.get("filename") or "")
+        if not self._isNiceDisplayPath(filename):
+            return
+        task = include.get("task")
+        if isinstance(task, dict):
+            self.pendingPrettyOutputTitle = self._niceDisplayTitleFromTask(task)
+            return
+        self.pendingPrettyOutputTitle = "Display"
+
     @staticmethod
     def _taskHeaderFromEvent(task: dict[str, object]) -> str:
         """Return an Ansible task header from callback task metadata."""
@@ -570,6 +590,39 @@ class RunScreen(Container):
         action = str(task.get("action") or "")
         return action.endswith("include_tasks")
 
+    @classmethod
+    def _isNiceDisplayIncludeTask(cls, task: dict[str, object]) -> bool:
+        """Return whether a task directly references the display wrapper."""
+
+        action = str(task.get("action") or "")
+        path = str(task.get("path") or "")
+        return action.endswith("include_tasks") and cls._isNiceDisplayPath(path)
+
+    @staticmethod
+    def _isNiceDisplayPath(path: str) -> bool:
+        """Return whether a path points at the display wrapper."""
+
+        return path.endswith("niceDisplay.yaml") or "/niceDisplay.yaml" in path
+
+    @classmethod
+    def _niceDisplayTitleFromTask(cls, task: dict[object, object]) -> str:
+        """Return the display title implied by a wrapper task."""
+
+        taskName = str(task.get("name") or "").strip()
+        if " : " in taskName:
+            taskName = taskName.split(" : ", 1)[1].strip()
+        return taskName or "Display"
+
+    def _detectPrettyOutputInclude(self, line: str) -> None:
+        """Detect native output for the display wrapper include."""
+
+        if not INCLUDED_PATTERN.match(line) or not self._isNiceDisplayPath(line):
+            return
+        if self.progressParser.currentTask is not None:
+            self.pendingPrettyOutputTitle = self.progressParser.currentTask.name
+            return
+        self.pendingPrettyOutputTitle = "Display"
+
     @staticmethod
     def _resultStateFromEvent(eventName: str) -> str:
         """Return an Ansible result token for a callback result event."""
@@ -585,18 +638,16 @@ class RunScreen(Container):
         return ""
 
     def _recordPrettyOutputFromEvent(self, eventRecord: dict[str, object]) -> None:
-        """Record a pretty output block from a marked callback result event."""
+        """Record a pretty output block from a pending display wrapper result."""
 
+        if self.pendingPrettyOutputTitle is None:
+            return
         resultRecord = self._eventResultRecord(eventRecord)
         taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
-        taskName = self._displayTaskName(taskHeader)
-        outputKind = self._prettyOutputKind(taskName)
-        if outputKind != "display":
+        if resultRecord is None:
             return
-        if resultRecord is None or "msg" not in resultRecord:
-            return
-        title = taskName.split(":", 1)[1].strip()
-        body = self._prettyPayloadBody(resultRecord.get("msg"))
+        title = self._prettyPayloadTitle(resultRecord) or self.pendingPrettyOutputTitle
+        body = self._prettyPayloadBody(self._prettyPayloadValue(resultRecord))
         if not title or not body:
             return
         self.progressParser.recordTaskOutput(
@@ -605,6 +656,7 @@ class RunScreen(Container):
             body,
             hideTaskRow=True,
         )
+        self.pendingPrettyOutputTitle = None
 
     @staticmethod
     def _eventResultRecord(
@@ -640,24 +692,6 @@ class RunScreen(Container):
             return task.strip()
         return ""
 
-    @staticmethod
-    def _displayTaskName(taskHeader: str) -> str:
-        """Return the display task name without a leading role prefix."""
-
-        if " : " in taskHeader:
-            return taskHeader.split(" : ", 1)[1].strip()
-        return taskHeader.strip()
-
-    @staticmethod
-    def _prettyOutputKind(taskName: str) -> str:
-        """Return the pretty output kind for a marked task name."""
-
-        normalizedName = taskName.lower()
-        for prefix, outputKind in PRETTY_OUTPUT_PREFIXES.items():
-            if normalizedName.startswith(prefix):
-                return outputKind
-        return ""
-
     @classmethod
     def _prettyPayloadBody(cls, payload: object) -> str:
         """Format a supported pretty payload without reflowing text."""
@@ -673,6 +707,35 @@ class RunScreen(Container):
         if payload is None:
             return ""
         return str(payload).rstrip("\n")
+
+    @staticmethod
+    def _prettyPayloadTitle(resultRecord: dict[str, object]) -> str:
+        """Return a title embedded in a structured display payload."""
+
+        title = resultRecord.get("title")
+        if isinstance(title, str):
+            return title.strip()
+        msg = resultRecord.get("msg")
+        if isinstance(msg, dict):
+            msgTitle = msg.get("title")
+            if isinstance(msgTitle, str):
+                return msgTitle.strip()
+        return ""
+
+    @staticmethod
+    def _prettyPayloadValue(resultRecord: dict[str, object]) -> object:
+        """Return the display payload from a callback result record."""
+
+        for key in ("display", "body", "msg"):
+            value = resultRecord.get(key)
+            if value is not None:
+                if key == "msg" and isinstance(value, dict):
+                    for nestedKey in ("display", "body", "msg", "payload"):
+                        nestedValue = value.get(nestedKey)
+                        if nestedValue is not None:
+                            return nestedValue
+                return value
+        return None
 
     def _startPromptFromEvent(
         self,

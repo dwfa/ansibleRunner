@@ -182,10 +182,31 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
         {
             "event": "task_start",
             "task": {
-                "name": (
-                    "listDBServers : niceDisplay: Postgres Flexible Servers "
-                    "matching cei-aztest- (1 found)"
-                ),
+                "action": "ansible.builtin.include_tasks",
+                "name": "Postgres Flexible Servers matching example- (1 found)",
+                "role": "listDBServers",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "Postgres Flexible Servers matching example- (1 found)",
+                    "role": "listDBServers",
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.debug",
+                "name": "show display payload",
                 "role": "listDBServers",
             },
         }
@@ -201,10 +222,8 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
                     "db1   East US\n"
                 ),
                 "task": {
-                    "name": (
-                        "listDBServers : niceDisplay: Postgres Flexible Servers "
-                        "matching cei-aztest- (1 found)"
-                    ),
+                    "action": "ansible.builtin.debug",
+                    "name": "show display payload",
                     "role": "listDBServers",
                 },
             },
@@ -214,12 +233,12 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     renderedProgress = _renderRich(runScreen._renderProgress())
 
     assert "niceDisplay:" not in renderedProgress
-    assert "Postgres Flexible Servers matching cei-aztest- (1 found)" in renderedProgress
+    assert "Postgres Flexible Servers matching example- (1 found)" in renderedProgress
     assert "NAME  LOCATION" in renderedProgress
     assert "db1   East US" in renderedProgress
     assert "msg:" not in renderedProgress
     assert runScreen._prettyOutputClipboardText() == (
-        "Postgres Flexible Servers matching cei-aztest- (1 found)\n"
+        "Postgres Flexible Servers matching example- (1 found)\n"
         "NAME  LOCATION\n"
         "----  --------\n"
         "db1   East US"
@@ -254,8 +273,21 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.include_tasks",
-                "name": "show niceDisplay sample",
+                "name": "Sample table output",
                 "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "Sample table output",
+                    "role": None,
+                },
             },
         }
     )
@@ -265,7 +297,7 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.debug",
-                "name": "niceDisplay: Sample table output",
+                "name": "show display payload",
                 "role": None,
             },
         }
@@ -277,7 +309,7 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
                 "msg": "NAME  STATUS\n----  ------\ntest  ok",
                 "task": {
                     "action": "ansible.builtin.debug",
-                    "name": "niceDisplay: Sample table output",
+                    "name": "show display payload",
                     "role": None,
                 },
             },
@@ -304,6 +336,38 @@ def testTuiRunPanelFormatsNiceDisplayListAndDictPayloads(tmp_path: Path) -> None
     assert runScreen._prettyPayloadBody({"name": "db1", "region": "East US"}) == (
         "name: db1\nregion: East US"
     )
+
+
+def testTuiRunPanelDoesNotUseNiceDisplayTaskNamePrefix(tmp_path: Path) -> None:
+    """Verify task names alone do not trigger boxed display output."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "List servers"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {"name": "niceDisplay: Server summary"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "msg": "NAME\n----\ndb1",
+                "task": {"name": "niceDisplay: Server summary"},
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+
+    assert not runScreen._hasPrettyOutput()
 
 
 def testTuiRunPanelCopiesOutputWithNativeClipboardTool(monkeypatch: Any) -> None:
@@ -354,7 +418,31 @@ def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
     runScreen._processEventRecord(
         {
             "event": "task_start",
-            "task": {"name": "niceDisplay: Server summary"},
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "Server summary",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "Server summary",
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.debug",
+                "name": "show display payload",
+            },
         }
     )
     runScreen._processEventRecord(
@@ -362,7 +450,10 @@ def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
             "event": "runner_ok",
             "result": {
                 "msg": "NAME\n----\ndb1",
-                "task": {"name": "niceDisplay: Server summary"},
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "show display payload",
+                },
             },
         }
     )

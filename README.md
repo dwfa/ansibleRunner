@@ -204,18 +204,78 @@ the progress panel.
   back to the bottom.
 - After a run completes, press `Enter`, `Space`, or `Esc` to return to the
   launch screen.
-- Wrapper tasks named `niceWait: <title>` or `nicePrompt: <title>` use the
-  title as the fallback prompt text for `waitForInput.yaml` and
-  `promptForInput.yaml`. Prompt wrappers should prefer `title:` for the short
-  label and `prompt:` for the full prompt body. Native Ansible prompt text from
-  the log still wins when present, and multiline prompt text is preserved in
-  the prompt panel.
-- Tasks named `niceDisplay: <title>` render their `msg` payload as a boxed
-  display block. The internal `niceDisplay:` task row is hidden from the
-  progress tree.
 - When boxed display output is visible, press `y` to copy the full block, or
   use `Fn`-drag selection followed by `⌘C` to copy selected text in terminals
   that support it.
+
+## Special TUI Wrappers
+
+`ansibleRunner` recognizes a few project conventions as display hints. These
+conventions are optional Ansible patterns for projects that want cleaner TUI
+output without changing normal Ansible execution.
+
+### Prompt Wrappers
+
+Use `waitForInput.yaml` for continue prompts and `promptForInput.yaml` for text
+input prompts. The wrapper task name can be whatever reads well in the playbook;
+the include target and native Ansible prompt text determine how the TUI handles
+the prompt.
+
+```yaml
+- name: "Confirm delete"
+  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/waitForInput.yaml"
+  vars:
+    title: "Confirm delete"
+    prompt: |
+      About to DELETE server [example-db-01] in env [dev].
+      Press Enter to continue.
+```
+
+```yaml
+- name: "Enter server alias"
+  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/promptForInput.yaml"
+  vars:
+    title: "Enter server alias"
+    prompt: |
+      Enter the short server alias to use for this run.
+```
+
+Prompt display rules:
+
+- `title:` is the short fallback label for the prompt.
+- `prompt:` is the full prompt body and may be multiline.
+- Native Ansible prompt text from the run log wins when present.
+- Multiline prompt text is preserved in the input panel.
+- The internal `wait for user input` / `prompt for user input` implementation
+  task rows are hidden from the progress tree.
+- Completed prompt interactions remain visible in normal role/task progress,
+  unless the same role later renders a boxed `niceDisplay` block.
+
+### niceDisplay
+
+Use `niceDisplay.yaml` when a task should show display output as a boxed block
+instead of a normal task row. The wrapper task name becomes the fallback box
+title.
+
+```yaml
+- name: "deprovisionDB complete"
+  ansible.builtin.include_tasks: "{{ tasksPath }}/misc/niceDisplay.yaml"
+  vars:
+    title: "deprovisionDB complete"
+    msg: |
+      server = [example-db-01.postgres.database.example.com]
+      env    = [dev]
+      action = [deleted]
+```
+
+Display rules:
+
+- The wrapper include row and internal display task row are hidden.
+- Only the boxed title and payload are shown.
+- At `--output-level role`, ordinary task rows remain hidden.
+- If the same role has completed prompt interactions, those prompt rows are not
+  appended below the boxed display block.
+- Press `y` to copy the full boxed output block.
 
 ## Direct CLI
 
