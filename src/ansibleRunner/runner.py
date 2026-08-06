@@ -311,6 +311,7 @@ class AnsibleCommandRunner:
 
         runnerOptions = options or RunnerOptions()
         extraVars: list[str] = []
+        extraVars.append(f"playbookPath={self._buildPlaybookPathVar(playbook)}")
         if node:
             extraVars.append(f"nodes={node}")
         if runnerOptions.debugFlag:
@@ -325,6 +326,27 @@ class AnsibleCommandRunner:
         command.extend(runnerOptions.extraArgs)
         command.append(str(playbook))
         return tuple(command)
+
+    def _buildPlaybookPathVar(self, playbook: str | Path) -> str:
+        """Build the playbookPath extra-var for playbook-relative includes.
+
+        Args:
+            playbook: Project-relative or absolute playbook path.
+
+        Returns:
+            Relative path from the playbook file directory back to
+            ``playbooks/``. Direct child playbooks use ``./``.
+        """
+
+        playbookPath = self._resolvePlaybookPath(playbook)
+        playbookRoot = self.projectRoot / "playbooks"
+        try:
+            relativeParent = playbookPath.parent.relative_to(playbookRoot)
+        except ValueError:
+            return "./"
+        if str(relativeParent) == ".":
+            return "./"
+        return "../" * len(relativeParent.parts)
 
     def run(self, command: Sequence[str]) -> RunnerResult:
         """Run a command in the configured project root.

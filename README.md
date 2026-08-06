@@ -140,6 +140,10 @@ Expected project files:
   the runner passes that target through to Ansible as `nodes=<value>`. When
   unset, the playbook is run without a `nodes` extra-var and can use its own
   `hosts`, inventory, or variables.
+- Every run receives `playbookPath` as an extra-var for project wrappers that
+  include files relative to the `playbooks/` root. Direct child playbooks get
+  `playbookPath=./`; a playbook one directory down, such as
+  `playbooks/db/listServers-pb.yaml`, gets `playbookPath=../`.
 - `ansible-core` is installed into `.venv`, so `ar.py` uses the project-local
   `ansible-playbook` command. Project-specific collections, roles, inventory,
   and Ansible configuration remain owned by the Ansible project.

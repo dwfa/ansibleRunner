@@ -54,7 +54,7 @@ def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
         "--syntax-check",
         "--list-tasks",
         "--extra-vars",
-        "nodes=dns debugFlag=1 newTarget=localhost",
+        "playbookPath=./ nodes=dns debugFlag=1 newTarget=localhost",
         "-e",
         "custom=value",
         "playbooks/site.yaml",
@@ -81,7 +81,12 @@ def testBuildPlaybookCommandAllowsMissingNode() -> None:
 
     command = runner.buildPlaybookCommand("playbooks/site.yaml", "")
 
-    assert command == ("ansible-playbook", "playbooks/site.yaml")
+    assert command == (
+        "ansible-playbook",
+        "--extra-vars",
+        "playbookPath=./",
+        "playbooks/site.yaml",
+    )
 
 
 def testBuildPlaybookCommandKeepsOtherExtraVarsWithoutNode() -> None:
@@ -95,6 +100,21 @@ def testBuildPlaybookCommandKeepsOtherExtraVarsWithoutNode() -> None:
     assert command == (
         "ansible-playbook",
         "--extra-vars",
-        "debugFlag=1",
+        "playbookPath=./ debugFlag=1",
         "playbooks/site.yaml",
+    )
+
+
+def testBuildPlaybookCommandAddsNestedPlaybookPath() -> None:
+    """Verify nested playbooks get a path back to the playbook root."""
+
+    runner = AnsibleCommandRunner(Path("/project"), Path("/project/logs"))
+
+    command = runner.buildPlaybookCommand("playbooks/db/listServers-pb.yaml", "")
+
+    assert command == (
+        "ansible-playbook",
+        "--extra-vars",
+        "playbookPath=../",
+        "playbooks/db/listServers-pb.yaml",
     )
