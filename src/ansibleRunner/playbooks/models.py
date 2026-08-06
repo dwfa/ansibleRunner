@@ -69,6 +69,7 @@ class PlaybookEntry:
         name: Playbook stem used as the config key.
         path: Filesystem path to the playbook.
         title: Display title parsed from the playbook header.
+        isDirectory: Whether this entry opens a playbook subdirectory.
     """
 
     configSummary: str
@@ -76,3 +77,4 @@ class PlaybookEntry:
     name: str
     path: Path
     title: str
+    isDirectory: bool = False

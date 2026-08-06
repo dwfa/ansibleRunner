@@ -131,8 +131,9 @@ Ansible project root.
 
 Expected project files:
 
-- `playbooks/*.yaml` or `playbooks/*.yml`: top-level playbooks shown in the
-  TUI. Nested files are ignored.
+- `playbooks/`: playbook menu root. Direct child directories are shown first
+  for grouping, followed by direct child `*.yaml` and `*.yml` playbooks.
+  Press `Enter` on a directory to open it.
 - The first meaningful `# ...` comment near the top of a playbook is shown as
   the playbook title. If no title exists, the TUI shows `(no title)`.
 - A saved `Node` value or launch-time `-n <node>` value is optional. When set,
@@ -154,7 +155,8 @@ Files created by the installer:
 Files created while using the TUI:
 
 - `.ansibleRunner/state/playbookConfig.json`: saved per-playbook launch
-  settings.
+  settings. Nested playbooks use a path-aware key such as
+  `db/listServers-pb`.
 - `logs/<playbook>-<timestamp>.log`: native Ansible log for each run.
 - `logs/<playbook>-<timestamp>.events.jsonl`: structured Ansible callback
   events used by the TUI to track active plays, roles, tasks, and prompts.
@@ -170,10 +172,11 @@ Start the project launcher:
 ./ar.py
 ```
 
-The first screen lists playbooks from `playbooks/`.
+The first screen lists directories and playbooks from `playbooks/`.
 
 - Use `Up` and `Down` to move.
-- Press `Enter` to review and run the selected playbook.
+- Press `Enter` on a directory to open it.
+- Press `Enter` on a playbook to review and run it.
 - Press `c` to edit saved settings for the selected playbook.
 - Press `q` or `Esc` to quit.
 

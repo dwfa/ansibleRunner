@@ -56,6 +56,71 @@ async def testTuiPlaybookPanelShowsDiscoveredPlaybooks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def testTuiPlaybookPanelShowsDirectoriesBeforePlaybooks(tmp_path: Path) -> None:
+    """Verify playbook grouping directories are listed before playbooks."""
+
+    playbookDir = tmp_path / "playbooks"
+    dbDir = playbookDir / "db"
+    dbDir.mkdir(parents=True)
+    (playbookDir / "site-pb.yaml").write_text("# Site\n---\n", encoding="utf-8")
+    defaults = RuntimeDefaults.forProject(tmp_path)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        table = pilot.app.query_one("#playbook-table", DataTable)
+
+        assert table.row_count == 2
+        assert table.get_cell_at((0, 1)) == "📁 db"
+        assert table.get_cell_at((1, 1)) == "site"
+
+
+@pytest.mark.asyncio
+async def testTuiPlaybookPanelEnterOpensDirectory(tmp_path: Path) -> None:
+    """Verify Enter on a directory drills into that directory."""
+
+    playbookDir = tmp_path / "playbooks"
+    dbDir = playbookDir / "db"
+    dbDir.mkdir(parents=True)
+    (dbDir / "listServers-pb.yaml").write_text("# List servers\n---\n", encoding="utf-8")
+    defaults = RuntimeDefaults.forProject(tmp_path)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
+        table = pilot.app.query_one("#playbook-table", DataTable)
+
+        await menu.action_launch()
+
+        assert table.row_count == 2
+        assert table.get_cell_at((0, 1)) == ".."
+        assert table.get_cell_at((1, 1)) == "listServers"
+        assert menu.selectedEntry() is not None
+        assert menu.selectedEntry().displayName == ".."
+
+
+@pytest.mark.asyncio
+async def testTuiPlaybookPanelConfigureIgnoresDirectories(tmp_path: Path) -> None:
+    """Verify configure action does not route directory entries."""
+
+    playbookDir = tmp_path / "playbooks"
+    dbDir = playbookDir / "db"
+    dbDir.mkdir(parents=True)
+    defaults = RuntimeDefaults.forProject(tmp_path)
+    configured: list[str] = []
+
+    async def fakeConfigure(entry) -> None:
+        """Capture configure routing."""
+
+        configured.append(entry.name)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
+        menu.onConfigure = fakeConfigure
+
+        await menu.action_configure()
+
+        assert configured == []
+
+
+@pytest.mark.asyncio
 async def testTuiPlaybookPanelSelectionFollowsCursor(tmp_path: Path) -> None:
     """Verify playbook actions resolve the highlighted row."""
 

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -60,6 +61,8 @@ class PlaybookMenuScreen(Container):
         super().__init__(id="playbook-menu")
         self.defaults = defaults
         self.entries: list[PlaybookEntry] = []
+        self.playbookRoot = self.defaults.projectRoot / "playbooks"
+        self.currentDir = self.playbookRoot
         self.onConfigure = onConfigure
         self.onLaunch = onLaunch
 
@@ -74,7 +77,7 @@ class PlaybookMenuScreen(Container):
             yield Static("📋 Available playbooks", id="playbook-title")
             yield DataTable(id="playbook-table")
             yield Static(
-                "↑/↓ move  Enter launch  c configure  q/Esc quit",
+                "↑/↓ move  Enter open/launch  c configure  q/Esc quit",
                 id="playbook-help",
             )
 
@@ -85,23 +88,32 @@ class PlaybookMenuScreen(Container):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.add_columns("#", "Playbook", "Title", "Last config")
+        self._refreshTable(table)
+
+        table.focus()
+
+    def _refreshTable(self, table: DataTable) -> None:
+        """Reload entries for the current directory.
+
+        Args:
+            table: Playbook table to repopulate.
+        """
 
         self.entries = self._loadEntries()
+        table.clear(columns=False)
         if not self.entries:
             table.add_row("-", "(none)", "No playbooks found", "(unset)")
-            table.focus()
             return
 
         for index, entry in enumerate(self.entries, start=1):
+            marker = "▸" if entry.isDirectory else str(index)
             table.add_row(
-                str(index),
+                marker,
                 entry.displayName,
                 entry.title,
                 entry.configSummary,
-                key=entry.name,
+                key=f"{'dir' if entry.isDirectory else 'playbook'}:{entry.name}",
             )
-
-        table.focus()
 
     async def action_launch(self) -> None:
         """Open the launch review panel for the selected playbook."""
@@ -109,6 +121,9 @@ class PlaybookMenuScreen(Container):
         selectedEntry = self.selectedEntry()
         if selectedEntry is None:
             self.notify("No playbook is selected.", severity="warning", title="Launch")
+            return
+        if selectedEntry.isDirectory:
+            self.openDirectory(selectedEntry.path)
             return
         if self.onLaunch is None:
             self.notify("Launch flow is not wired.", title="Coming soon")
@@ -132,10 +147,35 @@ class PlaybookMenuScreen(Container):
         if selectedEntry is None:
             self.notify("No playbook is selected.", severity="warning", title="Configure")
             return
+        if selectedEntry.isDirectory:
+            self.notify(
+                "Select a playbook to configure.",
+                severity="warning",
+                title="Configure",
+            )
+            return
         if self.onConfigure is None:
             self.notify("Configure flow is not wired.", title="Coming soon")
             return
         await self.onConfigure(selectedEntry)
+
+    def openDirectory(self, directory: Path) -> None:
+        """Open a playbook directory in the table.
+
+        Args:
+            directory: Directory to display.
+        """
+
+        root = self.playbookRoot.resolve()
+        target = directory.expanduser().resolve()
+        if target != root and root not in target.parents:
+            self.notify("Directory is outside playbooks.", severity="error", title="Open")
+            return
+        self.currentDir = target
+        table = self.query_one("#playbook-table", DataTable)
+        self._refreshTable(table)
+        if self.entries:
+            table.move_cursor(row=0)
 
     def selectedEntry(self) -> PlaybookEntry | None:
         """Return the currently highlighted playbook entry.
@@ -157,7 +197,6 @@ class PlaybookMenuScreen(Container):
             Playbook entries with display metadata and config summaries.
         """
 
-        playbookDir = self.defaults.projectRoot / "playbooks"
         configPath = self.defaults.stateDir / "playbookConfig.json"
         configs = loadPlaybookConfigs(configPath)
-        return discoverPlaybookEntries(playbookDir, configs)
+        return discoverPlaybookEntries(self.playbookRoot, configs, self.currentDir)
