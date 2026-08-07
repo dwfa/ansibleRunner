@@ -330,6 +330,63 @@ def testParserSuppressesIncludedTasks() -> None:
     ]
 
 
+def testParserHidesTasksMarkedWithArHide() -> None:
+    """Verify @ar:hide suppresses a task row and strips the display hint."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("TASK [manageImage : Load temp vars @ar:hide] *****", now=2.0)
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.processLine("TASK [manageImage : Configure service] *****", now=4.0)
+    parser.processLine("ok: [localhost]", now=5.0)
+    parser.finalizePlay(now=6.0)
+
+    rows = parser.rows(now=7.0)
+
+    assert [(row.icon, row.name) for row in rows] == [
+        ("🎭", "Build image"),
+        ("⚙", "manageImage"),
+        ("🔧", "Configure service"),
+    ]
+
+
+def testParserHidesRolesMarkedWithArHide() -> None:
+    """Verify @ar:hide suppresses a role row while keeping task rows visible."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("TASK [manageImage @ar:hide : Configure service] *****", now=2.0)
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.depth, row.icon, row.name) for row in rows] == [
+        (0, "🎭", "Build image"),
+        (1, "🔧", "Configure service"),
+    ]
+
+
+def testParserHidesPlaysMarkedWithArHide() -> None:
+    """Verify @ar:hide suppresses a play row while keeping descendants visible."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image @ar:hide] ****************", now=1.0)
+    parser.processLine("TASK [manageImage : Configure service] *****", now=2.0)
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.depth, row.icon, row.name) for row in rows] == [
+        (0, "⚙", "manageImage"),
+        (1, "🔧", "Configure service"),
+    ]
+
+
 def testParserSuppressesPromptImplementationTask() -> None:
     """Verify prompt implementation tasks can be hidden from progress rows."""
 
@@ -399,6 +456,32 @@ def testParserHonorsRoleOutputLevelForActiveTasks() -> None:
     assert [(row.icon, row.name, row.status) for row in rows] == [
         ("🎭", "Build image", "running"),
         ("⚙", "manageImage", "running"),
+    ]
+
+
+def testParserMergesRepeatedCompletedTaskHeaders() -> None:
+    """Verify callback/stdout repeats update the same completed task row."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Apply Postgres DDL] ****************", now=1.0)
+    parser.processLine(
+        "TASK [createSchema : createSchema: fail if pre-flight failed] *****",
+        now=2.0,
+    )
+    parser.processLine("ok: [localhost]", now=3.0)
+    parser.processLine(
+        "TASK [createSchema : createSchema: fail if pre-flight failed] *****",
+        now=4.0,
+    )
+    parser.processLine("failed: [localhost]", now=5.0)
+
+    rows = parser.rows(now=3.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Apply Postgres DDL", "failed"),
+        ("⚙", "createSchema", "failed"),
+        ("🔧", "createSchema: fail if pre-flight failed", "failed"),
     ]
 
 

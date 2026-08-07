@@ -28,6 +28,7 @@ OutputLevel = Literal["play", "role", "task"]
 PLAY_PATTERN = re.compile(r"^PLAY \[(.+?)\] \*+\s*$")
 TASK_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 HANDLER_PATTERN = re.compile(r"^RUNNING HANDLER \[(.+?)\] \*+\s*$")
+AR_HIDE_HINT_PATTERN = re.compile(r"(?:^|\s)@ar:hide(?:\s|$)")
 FATAL_PATTERN = re.compile(r"^fatal: \[.+?\]:")
 INCLUDED_PATTERN = re.compile(r"^included: .+ for .+$")
 RESULT_PATTERN = re.compile(
@@ -77,6 +78,7 @@ class ProgressItem:
     failed: bool = False
     result: str = ""
     interactions: list["ProgressItem"] = field(default_factory=list)
+    hidden: bool = False
     outputs: list[PrettyOutput] = field(default_factory=list)
     roles: list["ProgressItem"] = field(default_factory=list)
     sawExecutedResult: bool = False
@@ -135,13 +137,14 @@ class AnsibleProgressParser:
 
         playMatch = PLAY_PATTERN.match(cleanLine)
         if playMatch:
+            playName, hidden = self._displayNameAndHidden(playMatch.group(1))
             if (
                 self.currentPlay is not None
-                and self.currentPlay.name == playMatch.group(1)
+                and self.currentPlay.name == playName
             ):
                 return
             self.finalizePlay(now)
-            self.currentPlay = ProgressItem(playMatch.group(1), now)
+            self.currentPlay = ProgressItem(playName, now, hidden=hidden)
             self.idleStartTime = None
             return
 
@@ -282,19 +285,36 @@ class AnsibleProgressParser:
     ) -> None:
         """Append one play and visible descendants to rows."""
 
-        rows.append(self._row(0, "🎭", play, now, isActive))
+        baseDepth = 0
+        if play.hidden:
+            baseDepth = -1
+        else:
+            rows.append(self._row(0, "🎭", play, now, isActive))
         if self.outputLevel == "play":
             return
         if self.outputLevel == "task" or not self._hasVisibleTaskOutput(play):
             for interaction in play.interactions:
-                rows.append(self._row(1, "💬", interaction, now, False))
+                rows.append(
+                    self._row(
+                        max(0, baseDepth + 1),
+                        "💬",
+                        interaction,
+                        now,
+                        False,
+                    )
+                )
         for role in play.roles:
-            rows.append(self._row(1, "⚙", role, now, False))
+            roleDepth = max(0, baseDepth + 1)
+            taskDepth = roleDepth + 1
+            if not role.hidden:
+                rows.append(self._row(roleDepth, "⚙", role, now, False))
+            else:
+                taskDepth = roleDepth
             if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
                 for task in role.tasks:
                     self._appendTaskRows(
                         rows,
-                        2,
+                        taskDepth,
                         task,
                         now,
                         False,
@@ -302,16 +322,21 @@ class AnsibleProgressParser:
                     )
             if self.outputLevel == "task" or not self._hasVisibleTaskOutput(role):
                 for interaction in role.interactions:
-                    rows.append(self._row(2, "💬", interaction, now, False))
+                    rows.append(self._row(taskDepth, "💬", interaction, now, False))
         if isActive and self.currentRole is not None:
-            rows.append(self._row(1, "⚙", self.currentRole, now, True))
+            roleDepth = max(0, baseDepth + 1)
+            taskDepth = roleDepth + 1
+            if not self.currentRole.hidden:
+                rows.append(self._row(roleDepth, "⚙", self.currentRole, now, True))
+            else:
+                taskDepth = roleDepth
             if self.outputLevel == "task" or self._hasVisibleTaskOutput(
                 self.currentRole
             ):
                 for task in self.currentRole.tasks:
                     self._appendTaskRows(
                         rows,
-                        2,
+                        taskDepth,
                         task,
                         now,
                         False,
@@ -321,7 +346,7 @@ class AnsibleProgressParser:
                 self.currentRole
             ):
                 for interaction in self.currentRole.interactions:
-                    rows.append(self._row(2, "💬", interaction, now, False))
+                    rows.append(self._row(taskDepth, "💬", interaction, now, False))
             if (
                 self.currentTask is not None
                 and self._taskIsVisible(self.currentTask)
@@ -329,7 +354,7 @@ class AnsibleProgressParser:
             ):
                 self._appendTaskRows(
                     rows,
-                    2,
+                    taskDepth,
                     self.currentTask,
                     now,
                     True,
@@ -342,7 +367,7 @@ class AnsibleProgressParser:
             ):
                 self._appendTaskRows(
                     rows,
-                    1,
+                    max(0, baseDepth + 1),
                     self.currentTask,
                     now,
                     True,
@@ -352,7 +377,7 @@ class AnsibleProgressParser:
             for task in play.tasks:
                 self._appendTaskRows(
                     rows,
-                    1,
+                    max(0, baseDepth + 1),
                     task,
                     now,
                     False,
@@ -374,16 +399,15 @@ class AnsibleProgressParser:
             output.hideTaskRow for output in task.outputs
         )
         showOutputTaskRow = any(not output.hideTaskRow for output in task.outputs)
-        if (showTask and not hideOutputTaskRow) or showOutputTaskRow:
+        showVisibleTaskRow = not task.hidden and (
+            (showTask and not hideOutputTaskRow) or showOutputTaskRow
+        )
+        if showVisibleTaskRow:
             rows.append(self._row(depth, "🔧", task, now, isActive))
         for output in task.outputs:
             rows.append(
                 ProgressRow(
-                    depth=(
-                        depth + 1
-                        if (showTask and not hideOutputTaskRow) or showOutputTaskRow
-                        else depth
-                    ),
+                    depth=depth + 1 if showVisibleTaskRow else depth,
                     duration=0.0,
                     icon="",
                     name="",
@@ -538,10 +562,12 @@ class AnsibleProgressParser:
 
         if self.currentPlay is None:
             return
+        roleName, hidden = self._displayNameAndHidden(roleName)
         if self.currentRole is not None and self.currentRole.name == roleName:
+            self.currentRole.hidden = self.currentRole.hidden or hidden
             return
         self._finalizeRole(now)
-        self.currentRole = ProgressItem(roleName, now)
+        self.currentRole = ProgressItem(roleName, now, hidden=hidden)
 
     def _startTask(
         self,
@@ -569,7 +595,13 @@ class AnsibleProgressParser:
         else:
             self._finalizeRole(now)
             taskName = taskHeader
-        self.currentTask = ProgressItem(taskName, taskStartTime)
+        taskName, hidden = self._displayNameAndHidden(taskName)
+        if self._reopenLastCompletedTask(taskName, taskStartTime):
+            if self.currentTask is not None:
+                self.currentTask.hidden = self.currentTask.hidden or hidden
+            self.idleStartTime = None
+            return
+        self.currentTask = ProgressItem(taskName, taskStartTime, hidden=hidden)
         self.idleStartTime = None
 
     @staticmethod
@@ -577,6 +609,27 @@ class AnsibleProgressParser:
         """Return whether a task should be shown in progress rows."""
 
         return not task.sawResult or task.sawExecutedResult
+
+    def _reopenLastCompletedTask(self, taskName: str, startTime: float) -> bool:
+        """Reopen a just-completed task when another stream repeats its header."""
+
+        targetTasks: list[ProgressItem]
+        if self.currentRole is not None:
+            targetTasks = self.currentRole.tasks
+        elif self.currentPlay is not None:
+            targetTasks = self.currentPlay.tasks
+        else:
+            return False
+        if not targetTasks:
+            return False
+        lastTask = targetTasks[-1]
+        if self._normalizeTaskHeader(lastTask.name) != self._normalizeTaskHeader(
+            taskName,
+        ):
+            return False
+        self.currentTask = targetTasks.pop()
+        self.currentTask.startTime = min(self.currentTask.startTime, startTime)
+        return True
 
     def _matchesSyntheticTaskAlias(self, taskHeader: str) -> bool:
         """Return whether an Ansible header should merge into a synthetic task."""
@@ -593,6 +646,7 @@ class AnsibleProgressParser:
             return False
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
+            roleName, _hidden = self._displayNameAndHidden(roleName)
             currentRoleName = (
                 self.currentRole.name if self.currentRole is not None else None
             )
@@ -614,6 +668,7 @@ class AnsibleProgressParser:
         taskName = taskHeader
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
+            roleName, _hidden = self._displayNameAndHidden(roleName)
         normalizedTaskName = self._normalizeTaskHeader(taskName)
 
         if self._matchesCurrentTask(taskHeader):
@@ -640,4 +695,13 @@ class AnsibleProgressParser:
     def _normalizeTaskHeader(taskHeader: str) -> str:
         """Normalize task headers for alias matching."""
 
-        return " ".join(taskHeader.lower().split())
+        displayName, _hidden = AnsibleProgressParser._displayNameAndHidden(taskHeader)
+        return " ".join(displayName.lower().split())
+
+    @staticmethod
+    def _displayNameAndHidden(name: str) -> tuple[str, bool]:
+        """Return display name and whether it carries the AR hide hint."""
+
+        hidden = bool(AR_HIDE_HINT_PATTERN.search(name))
+        displayName = AR_HIDE_HINT_PATTERN.sub(" ", name)
+        return " ".join(displayName.split()), hidden

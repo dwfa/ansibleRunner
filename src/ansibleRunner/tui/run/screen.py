@@ -52,6 +52,7 @@ from ansibleRunner.runner import AnsibleCommandRunner, RunControl, RunnerResult
 
 BackHandler = Callable[[], Awaitable[None]]
 PromptMode = Literal["continue", "text"]
+NiceWrapperKind = Literal["display", "input", "wait"]
 RunnerFactory = Callable[[RuntimeDefaults], AnsibleCommandRunner]
 
 
@@ -60,9 +61,10 @@ ANSIBLE_LOG_RECORD_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} .+? INFO\| (.*)$")
 EVENT_LOG_PREFIX = "Event log: "
 RUN_LOG_PREFIX = "Logging to "
 PROMPT_TITLE_PREFIXES = {
-    "niceprompt:": "text",
+    "niceinput:": "text",
     "nicewait:": "continue",
 }
+NICE_DISPLAY_TITLE_PREFIX = "nicedisplay:"
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
     "aborted": "■",
@@ -127,15 +129,16 @@ class RunScreen(Container):
         self.activePromptMessage: str | None = None
         self.activePromptMode: PromptMode | None = None
         self.activePromptStart: float = 0.0
+        self.activePromptTitle: str | None = None
         self.pendingPromptMessage: str | None = None
         self.pendingPromptMode: PromptMode | None = None
+        self.pendingPromptTitle: str | None = None
+        self.pendingPrettyOutputTaskHeader: str | None = None
         self.pendingPrettyOutputTitle: str | None = None
         self.pendingSyntheticTaskAfterPrompt: tuple[str, set[str]] | None = None
         self.eventLogOffset = 0
         self.eventLogPath: Path | None = None
         self.runLogPath: Path | None = None
-        self.suppressNextPromptResult = False
-        self.suppressNextPromptTask = False
         self.runEndTime: float | None = None
         self.runStartTime = 0.0
         self.running = False
@@ -398,8 +401,6 @@ class RunScreen(Container):
             self.pendingPromptMode = None
             self.pendingPrettyOutputTitle = None
             self.pendingSyntheticTaskAfterPrompt = None
-            self.suppressNextPromptResult = False
-            self.suppressNextPromptTask = False
             self.progressParser.markAborted(now)
         else:
             if self.activePromptMessage is not None:
@@ -411,8 +412,6 @@ class RunScreen(Container):
             self.pendingPromptMode = None
             self.pendingPrettyOutputTitle = None
             self.pendingSyntheticTaskAfterPrompt = None
-            self.suppressNextPromptResult = False
-            self.suppressNextPromptTask = False
             self.progressParser.finalizePlay(now)
         self.progressRows = self.progressParser.rows(now)
 
@@ -439,7 +438,7 @@ class RunScreen(Container):
         cleanLine = ANSI_PATTERN.sub("", line.rstrip("\n"))
         self._detectEventLogPath(cleanLine)
         self._detectRunLogPath(cleanLine)
-        if self._suppressPromptImplementationLine(cleanLine, now):
+        if self._consumeNicePromptTaskLine(cleanLine, now):
             self.progressRows = self.progressParser.rows(now)
             return
         resultMatch = RESULT_PATTERN.match(cleanLine)
@@ -463,6 +462,35 @@ class RunScreen(Container):
             )
         self._detectPrompt(cleanLine, now)
         self.progressRows = self.progressParser.rows(now)
+
+    def _consumeNicePromptTaskLine(self, line: str, now: float) -> bool:
+        """Start nice prompt tasks before they become normal progress rows."""
+
+        taskMatch = TASK_HEADER_PATTERN.match(line)
+        if not taskMatch:
+            return False
+        taskHeader = taskMatch.group(1)
+        taskName = taskHeader.split(" : ", 1)[-1]
+        promptMode = self._promptModeFromTaskName(taskName)
+        if self.pendingPromptMode is None or self.pendingPromptMode != promptMode:
+            if self.pendingPromptMode is not None:
+                self._clearPendingPrompt()
+            return False
+        if promptMode is None:
+            self._clearPendingPrompt()
+            return False
+        promptTitle = self._promptTitleFromTaskName(taskName)
+        self._startPrompt(
+            self._latestPromptMessageFromLog(promptTitle, promptMode)
+            or promptTitle
+            or self._defaultPromptMessage(promptMode),
+            now,
+            fromInclude=True,
+            mode=promptMode,
+            title=promptTitle,
+        )
+        self._clearPendingPrompt()
+        return True
 
     def _detectRunLogPath(self, line: str) -> None:
         """Capture the native Ansible log path from runner status output."""
@@ -537,8 +565,15 @@ class RunScreen(Container):
         task = eventRecord.get("task")
         if not isinstance(task, dict):
             return
-        if self._isNiceDisplayIncludeTask(task):
-            self.pendingPrettyOutputTitle = self._niceDisplayTitleFromTask(task)
+        if self._niceWrapperKindFromTask(task) == "display":
+            self._startPrettyOutputAnchor(task, now)
+            return
+        wrapperKind = self._niceWrapperKindFromPath(str(task.get("path") or ""))
+        if wrapperKind == "wait":
+            self._startPromptFromEvent(task, "continue")
+            return
+        if wrapperKind == "input":
+            self._startPromptFromEvent(task, "text")
             return
         if self._isStructuralIncludeTask(task):
             return
@@ -548,28 +583,34 @@ class RunScreen(Container):
                 f"TASK [{taskHeader}] ********",
                 now,
             )
-        path = str(task.get("path") or "")
-        if path.endswith("waitForInput.yaml:36") or "/waitForInput.yaml:" in path:
-            self._startPromptFromEvent(task, "continue")
-        elif (
-            path.endswith("promptForInput.yaml:41")
-            or "/promptForInput.yaml:" in path
-        ):
-            taskName = str(task.get("name") or "").lower()
-            if "prompt for user input" in taskName:
-                self._startPromptFromEvent(task, "text")
 
     def _processIncludeEvent(self, include: dict[str, object]) -> None:
         """Process one structured include callback event."""
 
         filename = str(include.get("filename") or "")
-        if not self._isNiceDisplayPath(filename):
+        if self._niceWrapperKindFromPath(filename) != "display":
             return
         task = include.get("task")
         if isinstance(task, dict):
-            self.pendingPrettyOutputTitle = self._niceDisplayTitleFromTask(task)
+            self._startPrettyOutputAnchor(task, monotonic())
             return
         self.pendingPrettyOutputTitle = "Display"
+        self.pendingPrettyOutputTaskHeader = None
+
+    def _startPrettyOutputAnchor(
+        self,
+        task: dict[object, object],
+        now: float,
+    ) -> None:
+        """Start an invisible progress anchor for a niceDisplay output block."""
+
+        self.pendingPrettyOutputTitle = self._niceDisplayTitleFromTask(task)
+        self.pendingPrettyOutputTaskHeader = self._taskHeaderFromEvent(task)
+        if self.pendingPrettyOutputTaskHeader:
+            self.progressParser.startSyntheticTask(
+                self.pendingPrettyOutputTaskHeader,
+                now,
+            )
 
     @staticmethod
     def _taskHeaderFromEvent(task: dict[str, object]) -> str:
@@ -591,18 +632,41 @@ class RunScreen(Container):
         return action.endswith("include_tasks")
 
     @classmethod
-    def _isNiceDisplayIncludeTask(cls, task: dict[str, object]) -> bool:
-        """Return whether a task directly references the display wrapper."""
+    def _niceWrapperKindFromTask(
+        cls,
+        task: dict[str, object],
+    ) -> NiceWrapperKind | None:
+        """Return the nice wrapper kind directly referenced by a task."""
 
         action = str(task.get("action") or "")
         path = str(task.get("path") or "")
-        return action.endswith("include_tasks") and cls._isNiceDisplayPath(path)
+        if not action.endswith("include_tasks"):
+            return None
+        return cls._niceWrapperKindFromPath(path)
 
     @staticmethod
-    def _isNiceDisplayPath(path: str) -> bool:
+    def _niceWrapperKindFromPath(path: str) -> NiceWrapperKind | None:
+        """Return the nice wrapper kind implied by a task/include path."""
+
+        normalizedPath = path.strip()
+        if normalizedPath.startswith("included:"):
+            normalizedPath = normalizedPath[len("included:") :].strip()
+        normalizedPath = normalizedPath.split(" for ", 1)[0]
+        normalizedPath = normalizedPath.rsplit(":", 1)[0]
+        fileName = normalizedPath.rsplit("/", 1)[-1]
+        if fileName == "niceDisplay.yaml":
+            return "display"
+        if fileName == "niceInput.yaml":
+            return "input"
+        if fileName == "niceWait.yaml":
+            return "wait"
+        return None
+
+    @classmethod
+    def _isNiceDisplayPath(cls, path: str) -> bool:
         """Return whether a path points at the display wrapper."""
 
-        return path.endswith("niceDisplay.yaml") or "/niceDisplay.yaml" in path
+        return cls._niceWrapperKindFromPath(path) == "display"
 
     @classmethod
     def _niceDisplayTitleFromTask(cls, task: dict[object, object]) -> str:
@@ -611,7 +675,17 @@ class RunScreen(Container):
         taskName = str(task.get("name") or "").strip()
         if " : " in taskName:
             taskName = taskName.split(" : ", 1)[1].strip()
+        taskName = cls._stripNiceDisplayTitlePrefix(taskName)
         return taskName or "Display"
+
+    @staticmethod
+    def _stripNiceDisplayTitlePrefix(title: str) -> str:
+        """Remove the niceDisplay task-name title prefix."""
+
+        strippedTitle = title.strip()
+        if strippedTitle.lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
+            return strippedTitle[len(NICE_DISPLAY_TITLE_PREFIX) :].strip()
+        return strippedTitle
 
     def _detectPrettyOutputInclude(self, line: str) -> None:
         """Detect native output for the display wrapper include."""
@@ -619,9 +693,24 @@ class RunScreen(Container):
         if not INCLUDED_PATTERN.match(line) or not self._isNiceDisplayPath(line):
             return
         if self.progressParser.currentTask is not None:
-            self.pendingPrettyOutputTitle = self.progressParser.currentTask.name
+            self.pendingPrettyOutputTitle = self._stripNiceDisplayTitlePrefix(
+                self.progressParser.currentTask.name
+            )
+            self.pendingPrettyOutputTaskHeader = self._currentTaskHeader()
             return
         self.pendingPrettyOutputTitle = "Display"
+        self.pendingPrettyOutputTaskHeader = None
+
+    def _currentTaskHeader(self) -> str:
+        """Return the active parser task header in Ansible form."""
+
+        currentTask = self.progressParser.currentTask
+        if currentTask is None:
+            return ""
+        currentRole = self.progressParser.currentRole
+        if currentRole is not None:
+            return f"{currentRole.name} : {currentTask.name}"
+        return currentTask.name
 
     @staticmethod
     def _resultStateFromEvent(eventName: str) -> str:
@@ -640,23 +729,41 @@ class RunScreen(Container):
     def _recordPrettyOutputFromEvent(self, eventRecord: dict[str, object]) -> None:
         """Record a pretty output block from a pending display wrapper result."""
 
-        if self.pendingPrettyOutputTitle is None:
-            return
         resultRecord = self._eventResultRecord(eventRecord)
-        taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
         if resultRecord is None:
             return
-        title = self._prettyPayloadTitle(resultRecord) or self.pendingPrettyOutputTitle
+        taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
+        taskTitle = self._niceDisplayTitleFromTaskHeader(taskHeader)
+        if taskTitle is None:
+            return
+        title = (
+            self._prettyPayloadTitle(resultRecord)
+            or taskTitle
+            or self.pendingPrettyOutputTitle
+        )
         body = self._prettyPayloadBody(self._prettyPayloadValue(resultRecord))
         if not title or not body:
             return
+        targetTaskHeader = self.pendingPrettyOutputTaskHeader or taskHeader
         self.progressParser.recordTaskOutput(
-            taskHeader,
+            targetTaskHeader,
             title,
             body,
             hideTaskRow=True,
         )
+        self.pendingPrettyOutputTaskHeader = None
         self.pendingPrettyOutputTitle = None
+
+    @classmethod
+    def _niceDisplayTitleFromTaskHeader(cls, taskHeader: str) -> str | None:
+        """Return a niceDisplay title from a task header, when present."""
+
+        taskName = taskHeader.strip()
+        if " : " in taskName:
+            taskName = taskName.split(" : ", 1)[1].strip()
+        if not taskName.lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
+            return None
+        return cls._stripNiceDisplayTitlePrefix(taskName) or "Display"
 
     @staticmethod
     def _eventResultRecord(
@@ -726,11 +833,11 @@ class RunScreen(Container):
     def _prettyPayloadValue(resultRecord: dict[str, object]) -> object:
         """Return the display payload from a callback result record."""
 
-        for key in ("display", "body", "msg"):
+        for key in ("data", "display", "body", "msg"):
             value = resultRecord.get(key)
             if value is not None:
                 if key == "msg" and isinstance(value, dict):
-                    for nestedKey in ("display", "body", "msg", "payload"):
+                    for nestedKey in ("data", "display", "body", "msg", "payload"):
                         nestedValue = value.get(nestedKey)
                         if nestedValue is not None:
                             return nestedValue
@@ -746,11 +853,30 @@ class RunScreen(Container):
 
         if self.activePromptMessage is not None:
             return
-        message = self._latestPromptMessageFromLog() or self._promptMessageFromTask(
+        title = self._promptTitleFromTask(task)
+        message = self._latestPromptMessageFromLog(
+            title,
+            mode,
+        ) or self._promptMessageFromTask(
             task,
             mode,
         )
-        self._startPrompt(message, monotonic(), fromInclude=True, mode=mode)
+        self._startPrompt(
+            message,
+            monotonic(),
+            fromInclude=True,
+            mode=mode,
+            title=title,
+        )
+        self._clearPendingPrompt()
+
+    def _promptTitleFromTask(self, task: dict[object, object]) -> str | None:
+        """Return a prompt title from a callback task event, when present."""
+
+        taskName = str(task.get("name") or "")
+        if " : " in taskName:
+            taskName = taskName.split(" : ", 1)[1]
+        return self._promptTitleFromTaskName(taskName)
 
     def _promptMessageFromTask(
         self,
@@ -769,90 +895,31 @@ class RunScreen(Container):
             return taskName
         return self._defaultPromptMessage(mode)
 
-    def _detectPrompt(self, line: str, now: float) -> None:
-        """Detect Ansible pause/wait prompt tasks.
+    def _detectPrompt(self, line: str, _now: float) -> None:
+        """Arm native-output detection for nice prompt wrapper includes.
 
         Args:
             line: Cleaned runner output line.
-            now: Timestamp for the prompt start.
+            _now: Timestamp for the prompt line.
         """
 
-        if INCLUDED_PATTERN.match(line):
-            includePromptMode = self._promptModeFromIncludeLine(line)
-            if self.pendingPromptMessage is not None or includePromptMode is not None:
-                mode = self.pendingPromptMode or includePromptMode or "continue"
-                self._startPrompt(
-                    self.pendingPromptMessage or self._defaultPromptMessage(mode),
-                    now,
-                    fromInclude=True,
-                    mode=mode,
-                )
-                self.pendingPromptMessage = None
-                self.pendingPromptMode = None
+        if not INCLUDED_PATTERN.match(line):
             return
 
-        taskMatch = TASK_HEADER_PATTERN.match(line)
-        if not taskMatch:
+        promptMode = self._promptModeFromIncludeLine(line)
+        if promptMode is None or self.activePromptMessage is not None:
+            self._clearPendingPrompt()
             return
+        self.pendingPromptMode = promptMode
+        self.pendingPromptMessage = None
+        self.pendingPromptTitle = None
 
-        taskHeader = taskMatch.group(1)
-        taskParts = taskHeader.split(" : ", 1)
-        roleName = taskParts[0].lower() if len(taskParts) == 2 else ""
-        taskName = taskParts[-1]
-        normalizedTask = taskName.lower()
-        isPauseRole = roleName == "pause"
-        promptTitle = self._promptTitleFromTaskName(taskName)
-        promptTitleMode = self._promptModeFromTaskName(taskName)
-        isPromptInclude = self._isContinuePromptInclude(roleName, normalizedTask)
-        isPromptTask = "wait for user input" in normalizedTask
-        isTextPromptTask = self._isTextPromptTask(roleName, normalizedTask)
-        if promptTitleMode is not None and not isPromptTask and not isTextPromptTask:
-            self.pendingPromptMessage = (
-                promptTitle
-                if promptTitle is not None
-                else self._defaultPromptMessage(promptTitleMode)
-            )
-            self.pendingPromptMode = promptTitleMode
-            return
-        if isPauseRole and isPromptInclude and not isPromptTask:
-            self.pendingPromptMessage = taskName
-            self.pendingPromptMode = "continue"
-            return
-        if isPromptTask and self.activePromptMessage is not None:
-            self.progressParser.suppressActiveTask(now)
-            return
-        if isTextPromptTask and self.activePromptMessage is not None:
-            self.progressParser.suppressActiveTask(now)
-            return
-        if isPauseRole and isPromptInclude:
-            self.pendingPromptMessage = taskName
-            self.pendingPromptMode = "continue"
-            return
-        if self._isTextPromptInclude(roleName, normalizedTask):
-            self.pendingPromptMessage = taskName
-            self.pendingPromptMode = "text"
-            return
-        if isPromptTask and self.suppressNextPromptTask:
-            self.suppressNextPromptTask = False
-            self.progressParser.suppressActiveTask(now)
-            return
-        if isTextPromptTask and self.suppressNextPromptTask:
-            self.suppressNextPromptTask = False
-            self.progressParser.suppressActiveTask(now)
-            return
-        if not isPauseRole and not isPromptTask and not isTextPromptTask:
-            self.pendingPromptMessage = None
-            self.pendingPromptMode = None
-            return
+    def _clearPendingPrompt(self) -> None:
+        """Clear pending native prompt wrapper state."""
 
-        self._startPrompt(
-            self.pendingPromptMessage or taskName,
-            now,
-            fromInclude=False,
-            mode="text" if isTextPromptTask else "continue",
-        )
         self.pendingPromptMessage = None
         self.pendingPromptMode = None
+        self.pendingPromptTitle = None
 
     def _refreshProgress(self) -> None:
         """Render parsed progress rows."""
@@ -974,6 +1041,7 @@ class RunScreen(Container):
         table.add_column(justify="right", no_wrap=True, width=9)
         for row in self.progressRows:
             if row.output is not None:
+                table.add_row(Text(""), Text(""), Text(""))
                 table.add_row(self._prettyOutputPanel(row.output), Text(""), Text(""))
                 continue
             table.add_row(
@@ -1019,6 +1087,7 @@ class RunScreen(Container):
         now: float,
         fromInclude: bool,
         mode: PromptMode,
+        title: str | None = None,
     ) -> None:
         """Start collecting input for an active Ansible prompt.
 
@@ -1027,6 +1096,7 @@ class RunScreen(Container):
             message: Prompt message to display.
             mode: Prompt handling mode.
             now: Timestamp for prompt start.
+            title: Optional prompt panel title.
         """
 
         promptInput = self._promptInput()
@@ -1035,6 +1105,7 @@ class RunScreen(Container):
         self.activePromptMessage = message
         self.activePromptMode = mode
         self.activePromptStart = now
+        self.activePromptTitle = title
         promptInput.value = ""
         promptInput.display = mode == "text"
         if mode == "text":
@@ -1068,8 +1139,9 @@ class RunScreen(Container):
             return
         duration = monotonic() - self.activePromptStart
         promptMessage = self.activePromptMessage
+        interactionMessage = self.activePromptTitle or promptMessage
         self.progressParser.recordInteraction(
-            self._promptInteractionSummary(promptMessage),
+            self._promptInteractionSummary(interactionMessage),
             value,
             duration,
             aborted=aborted,
@@ -1079,41 +1151,16 @@ class RunScreen(Container):
             self.pendingSyntheticTaskAfterPrompt = self._syntheticTaskAfterPrompt(
                 promptMessage
             )
-        if self.activePromptFromInclude:
-            self.suppressNextPromptTask = True
+            self._startPendingSyntheticTask(monotonic())
         self.activePromptFromInclude = False
         self.activePromptInput = ""
         self.activePromptMessage = None
         self.activePromptMode = None
         self.activePromptStart = 0.0
+        self.activePromptTitle = None
         self._hidePromptPanel()
         self.focus()
         self.progressRows = self.progressParser.rows(monotonic())
-
-    def _suppressPromptImplementationLine(self, line: str, now: float) -> bool:
-        """Suppress internal prompt task output before it reaches the parser."""
-
-        taskMatch = TASK_HEADER_PATTERN.match(line)
-        if taskMatch and self.suppressNextPromptTask:
-            taskHeader = taskMatch.group(1)
-            taskParts = taskHeader.split(" : ", 1)
-            roleName = taskParts[0].lower() if len(taskParts) == 2 else ""
-            taskName = taskParts[-1].lower()
-            if "wait for user input" in taskName or self._isTextPromptTask(
-                roleName,
-                taskName,
-            ):
-                self.suppressNextPromptTask = False
-                self.suppressNextPromptResult = True
-                return True
-
-        resultMatch = RESULT_PATTERN.match(line)
-        if self.suppressNextPromptResult and resultMatch:
-            self.suppressNextPromptResult = False
-            if resultMatch.group(1) in {"ok", "changed"}:
-                self._startPendingSyntheticTask(now)
-                return True
-        return False
 
     def _startPendingSyntheticTask(self, now: float) -> None:
         """Start predicted post-prompt work, when one is known."""
@@ -1167,6 +1214,11 @@ class RunScreen(Container):
 
         self._refreshPromptMessageFromLog()
         promptPanel.display = True
+        displayTitle = self.activePromptTitle or self._defaultPromptTitle(
+            self.activePromptMode or "continue"
+        )
+        promptPanel.border_title = f"💬 {displayTitle}"
+        self.query_one("#run-prompt-title", Static).update(Text(f"💬 {displayTitle}"))
         self.query_one("#run-prompt-message", Static).update(
             Text(self.activePromptMessage)
         )
@@ -1184,7 +1236,10 @@ class RunScreen(Container):
     def _hidePromptPanel(self) -> None:
         """Hide and clear the prompt input panel."""
 
-        self.query_one("#run-prompt-panel", Container).display = False
+        promptPanel = self.query_one("#run-prompt-panel", Container)
+        promptPanel.border_title = ""
+        promptPanel.display = False
+        self.query_one("#run-prompt-title", Static).update("💬 Input")
         self.query_one("#run-prompt-message", Static).update("")
         self.query_one("#run-prompt-help", Static).update("")
         promptInput = self._promptInput()
@@ -1199,11 +1254,18 @@ class RunScreen(Container):
     def _refreshPromptMessageFromLog(self) -> None:
         """Replace fallback prompt labels with native Ansible prompt text."""
 
-        promptMessage = self._latestPromptMessageFromLog()
+        promptMessage = self._latestPromptMessageFromLog(
+            self.activePromptTitle,
+            self.activePromptMode,
+        )
         if promptMessage:
             self.activePromptMessage = promptMessage
 
-    def _latestPromptMessageFromLog(self) -> str | None:
+    def _latestPromptMessageFromLog(
+        self,
+        promptTitle: str | None = None,
+        promptMode: PromptMode | None = None,
+    ) -> str | None:
         """Return the latest prompt message from the native Ansible log."""
 
         if self.runLogPath is None or not self.runLogPath.is_file():
@@ -1216,7 +1278,16 @@ class RunScreen(Container):
         lines = logText.splitlines()
         for index, line in reversed(list(enumerate(lines))):
             payload = self._ansibleLogPayload(line)
-            if not self._isPromptMarker(payload):
+            marker = self._promptMarker(payload)
+            if marker is None:
+                continue
+            markerMode, markerTitle = marker
+            if promptMode is not None and markerMode != promptMode:
+                continue
+            if (
+                promptTitle is not None
+                and markerTitle.casefold() != promptTitle.strip().casefold()
+            ):
                 continue
             promptMessage = self._nextPromptLogMessage(lines[index + 1 :])
             if promptMessage:
@@ -1248,18 +1319,20 @@ class RunScreen(Container):
         message = "\n".join(promptLines).strip()
         return message or None
 
-    @staticmethod
-    def _isPromptMarker(payload: str) -> bool:
-        """Return whether a native log payload marks an Ansible prompt."""
+    @classmethod
+    def _promptMarker(cls, payload: str) -> tuple[PromptMode, str] | None:
+        """Return nice prompt marker details from a native log payload."""
 
-        return (
-            payload.startswith("[")
-            and payload.endswith("]")
-            and (
-                ": wait for user input" in payload
-                or ": prompt for user input" in payload
-            )
-        )
+        if not payload.startswith("[") or not payload.endswith("]"):
+            return None
+        marker = payload[1:-1].strip()
+        if " : " in marker:
+            marker = marker.split(" : ", 1)[1].strip()
+        mode = cls._promptModeFromTaskName(marker)
+        title = cls._promptTitleFromTaskName(marker)
+        if mode is None or title is None:
+            return None
+        return mode, title
 
     @staticmethod
     def _cleanPromptMessage(message: str) -> str:
@@ -1298,38 +1371,14 @@ class RunScreen(Container):
                 return cast(PromptMode, mode)
         return None
 
-    @staticmethod
-    def _isTextPromptTask(roleName: str, normalizedTask: str) -> bool:
-        """Return whether a task is a supported text-input prompt."""
-
-        if roleName == "promptforinput":
-            return normalizedTask.startswith("prompt for ")
-        return normalizedTask.startswith("prompt for ")
-
-    @staticmethod
-    def _isTextPromptInclude(roleName: str, normalizedTask: str) -> bool:
-        """Return whether a task is a text-input include wrapper."""
-
-        return roleName == "promptforinput" and normalizedTask.startswith("prompt for ")
-
-    @staticmethod
-    def _isContinuePromptInclude(roleName: str, normalizedTask: str) -> bool:
-        """Return whether a task is a continue-prompt include wrapper."""
-
-        if roleName != "pause":
-            return False
-        return (
-            "wait of input" in normalizedTask
-            or "wait for user input to continue" in normalizedTask
-        )
-
-    @staticmethod
-    def _promptModeFromIncludeLine(line: str) -> PromptMode | None:
+    @classmethod
+    def _promptModeFromIncludeLine(cls, line: str) -> PromptMode | None:
         """Return prompt mode implied by an included task path."""
 
-        if "/waitForInput.yaml" in line:
+        wrapperKind = cls._niceWrapperKindFromPath(line)
+        if wrapperKind == "wait":
             return "continue"
-        if "/promptForInput.yaml" in line:
+        if wrapperKind == "input":
             return "text"
         return None
 
@@ -1340,6 +1389,14 @@ class RunScreen(Container):
         if mode == "text":
             return "prompt for user input"
         return "wait for user input"
+
+    @staticmethod
+    def _defaultPromptTitle(mode: PromptMode) -> str:
+        """Return a fallback prompt panel title."""
+
+        if mode == "text":
+            return "Input"
+        return "Input"
 
     def _renderFailurePanel(self) -> Panel:
         """Render compact failure details.

@@ -53,9 +53,18 @@ curl -LO https://github.com/dwfa/ansibleRunner/releases/latest/download/install.
 python3 install.py
 ```
 
-The installer creates `.venv`, installs the `ansibleRunner` release wheel from
-the latest GitHub release, installs runtime dependencies including
-`ansible-core`, and writes `ar.py` as a thin project launcher.
+The installer creates `.venv`, installs `ansibleRunner`, installs runtime
+dependencies including `ansible-core`, and writes `ar.py` as a thin project
+launcher.
+
+Package source selection:
+
+- `python3 install.py -w ./ansiblerunner-<version>-py3-none-any.whl` installs
+  the explicit wheel you provide.
+- If no `-w` value is provided, the installer looks beside `install.py` for
+  `ansiblerunner-*-py3-none-any.whl` and uses the newest version found there.
+- If no local wheel is found, the installer downloads the newest release wheel
+  from GitHub release assets.
 
 Start the TUI from the Ansible project root:
 
@@ -89,8 +98,8 @@ Then place the downloaded wheel beside `install.py`.
 python3 install.py
 ```
 
-When an `ansiblerunner-*-py3-none-any.whl` file is beside `install.py`, the
-installer uses the newest local wheel instead of downloading one from GitHub.
+When multiple `ansiblerunner-*-py3-none-any.whl` files are beside
+`install.py`, the installer chooses by parsed package version, not file date.
 
 The local wheel covers `ansibleRunner` itself. Pip still needs access to
 runtime dependencies such as `ansible-core` and `textual` through its cache, a
@@ -222,71 +231,113 @@ the progress panel.
   use `Fn`-drag selection followed by `⌘C` to copy selected text in terminals
   that support it.
 
+## AR Display Hints
+
+Task, role, and play names may include `@ar:hide` when a row should be omitted
+from the AR progress tree while still running normally under Ansible.
+
+Examples:
+
+```yaml
+- name: "load temporary vars @ar:hide"
+  ansible.builtin.include_vars:
+    file: temp.yaml
+```
+
+Display rules:
+
+- AR strips `@ar:hide` from matching and display names.
+- A hidden task suppresses that task row. For `niceDisplay`, this is how the
+  wrapper task becomes only the boxed output block.
+- A hidden role suppresses the role row when Ansible's emitted role segment
+  contains `@ar:hide`; visible child tasks can still render.
+- A hidden play suppresses the play row; visible child roles/tasks can still
+  render.
+- Completed `niceWait` and `niceInput` prompt history rows are AR interaction
+  records, not Ansible task rows. They remain visible unless prompt-history
+  hiding is added separately.
+- Plain `ansible-playbook` still shows the literal task name, including the
+  hint.
+
 ## Special TUI Wrappers
 
-`ansibleRunner` recognizes a few project conventions as display hints. These
-conventions are optional Ansible patterns for projects that want cleaner TUI
-output without changing normal Ansible execution.
+`ansibleRunner` can recognize small Ansible wrapper task files and render them
+as cleaner TUI prompts or display blocks. The wrappers are optional. A playbook
+can still run with normal `ansible-playbook`; the wrapper task names simply give
+AR a stable title to read from Ansible output and callback events. Detection is
+based on the included wrapper filename, so the files may live wherever a
+project keeps shared tasks.
 
 ### Prompt Wrappers
 
-Use `waitForInput.yaml` for continue prompts and `promptForInput.yaml` for text
-input prompts. The wrapper task name can be whatever reads well in the playbook;
-the include target and native Ansible prompt text determine how the TUI handles
-the prompt. The wrapper files can live wherever the Ansible project keeps
-shared task files.
+Use `niceWait.yaml` for continue prompts and `niceInput.yaml` for text
+input prompts. In the playbook, include the wrapper file and pass:
+
+- `title`: short label shown by AR.
+- `data`: full prompt text shown by Ansible and AR; multiline text is allowed.
+
+Playbook usage:
 
 ```yaml
 - name: "Confirm delete"
-  ansible.builtin.include_tasks: "path/to/waitForInput.yaml"
+  ansible.builtin.include_tasks: "path/to/niceWait.yaml"
   vars:
     title: "Confirm delete"
-    prompt: |
+    data: |
       About to DELETE server [example-db-01] in env [dev].
       Press Enter to continue.
 ```
 
 ```yaml
 - name: "Enter server alias"
-  ansible.builtin.include_tasks: "path/to/promptForInput.yaml"
+  ansible.builtin.include_tasks: "path/to/niceInput.yaml"
   vars:
     title: "Enter server alias"
-    prompt: |
+    data: |
       Enter the short server alias to use for this run.
 ```
 
 Prompt display rules:
 
-- `title:` is the short fallback label for the prompt.
-- `prompt:` is the full prompt body and may be multiline.
+- The reusable wrapper task uses `niceWait:` or `niceInput:` in its own task
+  name so AR can read the title from Ansible output.
+- The prompt panel shows `title` in its heading and `data` as the prompt body.
+- `niceWait.yaml` is treated as a continue prompt; `niceInput.yaml` is
+  treated as a text prompt.
 - Native Ansible prompt text from the run log wins when present.
 - Multiline prompt text is preserved in the input panel.
-- The internal `wait for user input` / `prompt for user input` implementation
-  task rows are hidden from the progress tree.
-- Completed prompt interactions remain visible in normal role/task progress,
-  unless the same role later renders a boxed `niceDisplay` block.
+- The internal wrapper task rows are hidden from the progress tree.
+- Completed prompt interactions remain visible in normal role/task progress.
 
 ### niceDisplay
 
-Use `niceDisplay.yaml` when a task should show display output as a boxed block
-instead of a normal task row. The wrapper task name becomes the fallback box
-title.
+Use `niceDisplay.yaml` when a task should render a boxed display block instead
+of a normal task row. In the playbook, include the wrapper file and pass:
+
+- `title`: short box title shown by AR.
+- `data`: display payload printed by Ansible and rendered by AR. A string,
+  multiline block, list, or mapping can be used.
+
+Playbook usage:
 
 ```yaml
-- name: "deprovisionDB complete"
+- name: "Show deprovision result"
   ansible.builtin.include_tasks: "path/to/niceDisplay.yaml"
   vars:
     title: "deprovisionDB complete"
-    msg: |
-      server = [example-db-01.postgres.database.example.com]
-      env    = [dev]
-      action = [deleted]
+    data:
+      - "server = [example-db-01.postgres.database.example.com]"
+      - "env    = [dev]"
+      - "action = [deleted]"
 ```
 
 Display rules:
 
-- The wrapper include row and internal display task row are hidden.
+- The reusable wrapper task uses `niceDisplay:` in its own task name so AR can
+  read the title from Ansible output.
+- The include row and internal display task row are hidden.
 - Only the boxed title and payload are shown.
+- `niceDisplay:` is stripped from the boxed title.
 - At `--output-level role`, ordinary task rows remain hidden.
 - If the same role has completed prompt interactions, those prompt rows are not
   appended below the boxed display block.
@@ -294,25 +345,26 @@ Display rules:
 
 ### Wrapper Task Files
 
-These are minimal wrapper task file examples that projects can copy and adapt.
+These are the reusable task files included by the playbook examples above.
+Projects can copy and adapt them wherever shared task files live.
 
-`waitForInput.yaml`:
+`niceWait.yaml`:
 
 ```yaml
 ---
-- name: "wait for user input"
+- name: "niceWait: {{ title | default('wait for user input') }}"
   ansible.builtin.pause:
-    prompt: "{{ prompt | default(title | default('Press Enter to continue')) }}"
+    prompt: "{{ data | default(title | default('Press Enter to continue')) }}"
     echo: true
 ```
 
-`promptForInput.yaml`:
+`niceInput.yaml`:
 
 ```yaml
 ---
-- name: "prompt for user input"
+- name: "niceInput: {{ title | default('prompt for user input') }}"
   ansible.builtin.pause:
-    prompt: "{{ prompt | default(title | default('Enter value')) }}"
+    prompt: "{{ data | default(title | default('Enter value')) }}"
     echo: true
   register: promptInput
 
@@ -325,9 +377,9 @@ These are minimal wrapper task file examples that projects can copy and adapt.
 
 ```yaml
 ---
-- name: "show display output"
+- name: "niceDisplay: {{ title | default('display output') }}"
   ansible.builtin.debug:
-    msg: "{{ msg | default(display | default(body | default(''))) }}"
+    msg: "{{ data }}"
 ```
 
 ## Direct CLI

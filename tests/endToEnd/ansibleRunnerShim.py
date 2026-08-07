@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import venv
@@ -35,10 +36,10 @@ from pathlib import Path
 
 
 PACKAGE_NAME = "ansibleRunner"
-WHEEL_PATH = Path(
-    "/Volumes/dwfaData/Projects/ansible/ansibleRunner/dist/"
-    "ansiblerunner-1.0.4-py3-none-any.whl"
+WHEEL_DIR = Path(
+    "/Volumes/dwfaData/Projects/ansible/ansibleRunner/dist"
 )
+WHEEL_PATH: Path | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,11 +94,10 @@ def installPackage(pythonBin: Path, logPath: Path) -> None:
         logPath: File receiving pip install output.
     """
 
-    if not WHEEL_PATH.is_file():
-        raise SystemExit(f"ansibleRunner wheel not found: {WHEEL_PATH}")
+    wheelPath = getWheelPath()
 
     logPath.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Installing {PACKAGE_NAME} from {WHEEL_PATH}", file=sys.stderr)
+    print(f"Installing {PACKAGE_NAME} from {wheelPath}", file=sys.stderr)
     print(f"Install log: {logPath}", file=sys.stderr)
     command = [
         str(pythonBin),
@@ -106,7 +106,7 @@ def installPackage(pythonBin: Path, logPath: Path) -> None:
         "install",
         "--upgrade",
         "--force-reinstall",
-        str(WHEEL_PATH),
+        str(wheelPath),
     ]
     with logPath.open("w", encoding="utf-8") as logFile:
         logFile.write(f"command={' '.join(command)}\n\n")
@@ -121,6 +121,29 @@ def installPackage(pythonBin: Path, logPath: Path) -> None:
     if result.returncode != 0:
         print(f"Install failed. See log: {logPath}", file=sys.stderr)
         raise SystemExit(result.returncode)
+
+
+def getWheelPath() -> Path:
+    """Return the newest local ansibleRunner wheel by parsed version."""
+
+    if WHEEL_PATH is not None:
+        if WHEEL_PATH.is_file():
+            return WHEEL_PATH
+        raise SystemExit(f"ansibleRunner wheel not found: {WHEEL_PATH}")
+
+    wheels = list(WHEEL_DIR.glob("ansiblerunner-*-py3-none-any.whl"))
+    if not wheels:
+        raise SystemExit(f"ansibleRunner wheel not found in: {WHEEL_DIR}")
+    return max(wheels, key=lambda path: wheelSortKey(path.name))
+
+
+def wheelSortKey(name: str) -> tuple[int, ...]:
+    """Return a numeric sort key for an ansibleRunner wheel filename."""
+
+    match = re.match(r"ansiblerunner-(\d+(?:\.\d+)*)-py3-none-any\.whl$", name)
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("."))
 
 
 def ensureVenv(venvDir: Path) -> None:

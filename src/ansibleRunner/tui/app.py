@@ -204,16 +204,17 @@ class AnsibleRunnerTui(App[int]):
     #run-prompt-title {
         color: green;
         content-align: center middle;
+        display: none;
         text-style: bold;
         width: 100%;
     }
 
     #run-prompt-message {
+        margin-bottom: 1;
         text-style: bold;
     }
 
     #run-prompt-input {
-        margin: 1 0 0 0;
         width: 100%;
     }
 

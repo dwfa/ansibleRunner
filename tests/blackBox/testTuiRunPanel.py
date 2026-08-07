@@ -183,7 +183,7 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.include_tasks",
-                "name": "Postgres Flexible Servers matching example- (1 found)",
+                "name": "niceDisplay: Postgres Flexible Servers matching example- (1 found)",
                 "role": "listDBServers",
             },
         }
@@ -195,7 +195,7 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
                 "filename": "/tmp/tasks/misc/niceDisplay.yaml",
                 "task": {
                     "action": "ansible.builtin.include_tasks",
-                    "name": "Postgres Flexible Servers matching example- (1 found)",
+                    "name": "niceDisplay: Postgres Flexible Servers matching example- (1 found)",
                     "role": "listDBServers",
                 },
             },
@@ -206,7 +206,7 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.debug",
-                "name": "show display payload",
+                "name": "niceDisplay: Postgres Flexible Servers matching example- (1 found)",
                 "role": "listDBServers",
             },
         }
@@ -223,7 +223,7 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
                 ),
                 "task": {
                     "action": "ansible.builtin.debug",
-                    "name": "show display payload",
+                    "name": "niceDisplay: Postgres Flexible Servers matching example- (1 found)",
                     "role": "listDBServers",
                 },
             },
@@ -243,6 +243,158 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
         "----  --------\n"
         "db1   East US"
     )
+
+
+def testTuiRunPanelKeepsNiceDisplayInTaskOrder(tmp_path: Path) -> None:
+    """Verify delayed niceDisplay results render at their original stream point."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Apply Postgres DDL"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.command",
+                "name": "t0",
+                "role": "createSchema",
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "niceDisplay: Schema plan",
+                    "role": "createSchema",
+                },
+            },
+        }
+    )
+    for taskName in ("t1", "t2"):
+        runScreen._processEventRecord(
+            {
+                "event": "task_start",
+                "task": {
+                    "action": "ansible.builtin.command",
+                    "name": taskName,
+                    "role": "createSchema",
+                },
+            }
+        )
+        runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "changed": False,
+                "msg": "operation = create schema",
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "niceDisplay: Schema plan",
+                    "role": "createSchema",
+                },
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert renderedProgress.index("t0") < renderedProgress.index("Schema plan")
+    assert renderedProgress.index("Schema plan") < renderedProgress.index("t1")
+    assert renderedProgress.index("t1") < renderedProgress.index("t2")
+
+
+def testTuiRunPanelHidesNiceWaitCallbackTaskRow(tmp_path: Path) -> None:
+    """Verify callback niceWait implementation tasks become prompts, not rows."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Test a few roles"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "show niceWait sample",
+                "path": "/tmp/playbooks/test-pb.yaml:42",
+                "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "show niceWait sample",
+                    "path": "/tmp/playbooks/test-pb.yaml:42",
+                    "role": None,
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceWait.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "show niceWait sample",
+                    "path": "/tmp/playbooks/test-pb.yaml:42",
+                    "role": None,
+                },
+            },
+        }
+    )
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.pause",
+                "name": "niceWait: Sample nice wait",
+                "path": "/tmp/tasks/misc/niceWait.yaml:36",
+                "role": None,
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert startedPrompts == [
+        ("Sample nice wait", "continue", "Sample nice wait"),
+    ]
+    assert "niceWait: Sample nice wait" not in renderedProgress
 
 
 def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
@@ -271,33 +423,32 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
     runScreen._processEventRecord(
         {
             "event": "task_start",
-            "task": {
-                "action": "ansible.builtin.include_tasks",
-                "name": "Sample table output",
-                "role": None,
-            },
-        }
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "niceDisplay: Sample table output",
+                    "role": None,
+                },
+            }
     )
     runScreen._processEventRecord(
         {
             "event": "include",
             "include": {
-                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
-                "task": {
-                    "action": "ansible.builtin.include_tasks",
-                    "name": "Sample table output",
-                    "role": None,
+                    "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                    "task": {
+                        "action": "ansible.builtin.include_tasks",
+                        "name": "niceDisplay: Sample table output",
+                        "role": None,
+                    },
                 },
-            },
-        }
-    )
-    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+            }
+        )
     runScreen._processEventRecord(
         {
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.debug",
-                "name": "show display payload",
+                "name": "niceDisplay: Sample table output",
                 "role": None,
             },
         }
@@ -306,13 +457,13 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
         {
             "event": "runner_ok",
             "result": {
-                "msg": "NAME  STATUS\n----  ------\ntest  ok",
-                "task": {
-                    "action": "ansible.builtin.debug",
-                    "name": "show display payload",
-                    "role": None,
+                    "msg": "NAME  STATUS\n----  ------\ntest  ok",
+                    "task": {
+                        "action": "ansible.builtin.debug",
+                        "name": "niceDisplay: Sample table output",
+                        "role": None,
+                    },
                 },
-            },
         }
     )
     runScreen.progressParser.finalizePlay(monotonic())
@@ -338,8 +489,8 @@ def testTuiRunPanelFormatsNiceDisplayListAndDictPayloads(tmp_path: Path) -> None
     )
 
 
-def testTuiRunPanelDoesNotUseNiceDisplayTaskNamePrefix(tmp_path: Path) -> None:
-    """Verify task names alone do not trigger boxed display output."""
+def testTuiRunPanelUsesNiceDisplayTaskNamePrefix(tmp_path: Path) -> None:
+    """Verify niceDisplay task names carry boxed display titles."""
 
     createPlaybook(tmp_path)
     runScreen = createRunScreen(tmp_path)
@@ -366,8 +517,12 @@ def testTuiRunPanelDoesNotUseNiceDisplayTaskNamePrefix(tmp_path: Path) -> None:
         }
     )
     runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
 
-    assert not runScreen._hasPrettyOutput()
+    assert runScreen._hasPrettyOutput()
+    assert "Server summary" in renderedProgress
+    assert "NAME" in renderedProgress
+    assert "niceDisplay:" not in renderedProgress
 
 
 def testTuiRunPanelCopiesOutputWithNativeClipboardTool(monkeypatch: Any) -> None:
@@ -418,30 +573,30 @@ def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
     runScreen._processEventRecord(
         {
             "event": "task_start",
-            "task": {
-                "action": "ansible.builtin.include_tasks",
-                "name": "Server summary",
-            },
-        }
-    )
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "niceDisplay: Server summary",
+                },
+            }
+        )
     runScreen._processEventRecord(
         {
             "event": "include",
             "include": {
-                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
-                "task": {
-                    "action": "ansible.builtin.include_tasks",
-                    "name": "Server summary",
+                    "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                    "task": {
+                        "action": "ansible.builtin.include_tasks",
+                        "name": "niceDisplay: Server summary",
+                    },
                 },
-            },
-        }
+            }
     )
     runScreen._processEventRecord(
         {
             "event": "task_start",
             "task": {
                 "action": "ansible.builtin.debug",
-                "name": "show display payload",
+                "name": "niceDisplay: Server summary",
             },
         }
     )
@@ -449,13 +604,13 @@ def testTuiRunPanelCompletedHelpShowsPrettyOutputCopyOptions(
         {
             "event": "runner_ok",
             "result": {
-                "msg": "NAME\n----\ndb1",
-                "task": {
-                    "action": "ansible.builtin.debug",
-                    "name": "show display payload",
+                    "msg": "NAME\n----\ndb1",
+                    "task": {
+                        "action": "ansible.builtin.debug",
+                        "name": "niceDisplay: Server summary",
+                    },
                 },
-            },
-        }
+            }
     )
     runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
 
@@ -1135,11 +1290,11 @@ async def testTuiRunPanelSpaceContinuesEmptyPrompt(
 
 
 @pytest.mark.asyncio
-async def testTuiRunPanelDetectsCustomWaitPromptInclude(
+async def testTuiRunPanelDetectsNiceWaitPromptInclude(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify waitForInput includes show prompts with custom wrapper names."""
+    """Verify niceWait includes show prompts with custom wrapper names."""
 
     _writeCustomWaitIncludeFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
@@ -1178,10 +1333,7 @@ async def testTuiRunPanelDetectsCustomWaitPromptInclude(
         renderedProgress = _renderRich(runProgress.content)
 
         assert runScreen.activePromptMessage is None
-        assert (
-            "💬 Attach external device & press Enter to continue ... — continued"
-            in renderedProgress
-        )
+        assert "💬 Attach external device — continued" in renderedProgress
         assert "🔧 wait for user input" not in renderedProgress
 
 
@@ -1190,7 +1342,7 @@ async def testTuiRunPanelUsesNiceWaitTitle(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify niceWait include titles are used for continue prompts."""
+    """Verify niceWait titles label continue prompts."""
 
     _writeNiceWaitFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
@@ -1206,12 +1358,15 @@ async def testTuiRunPanelUsesNiceWaitTitle(
         await waitForActivePrompt(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptTitle = pilot.app.query_one("#run-prompt-title", Static)
         promptMessage = pilot.app.query_one("#run-prompt-message", Static)
         promptInput = pilot.app.query_one("#run-prompt-input", Input)
 
-        assert runScreen.activePromptMessage == "Attach external device"
+        assert runScreen.activePromptMessage == "nice wait info"
+        assert runScreen.activePromptTitle == "Attach external device"
         assert runScreen.activePromptMode == "continue"
-        assert str(promptMessage.content) == "Attach external device"
+        assert str(promptTitle.content) == "💬 Attach external device"
+        assert str(promptMessage.content) == "nice wait info"
         assert not promptInput.display
 
         await pilot.press("enter")
@@ -1224,13 +1379,13 @@ async def testTuiRunPanelUsesNiceWaitTitle(
 
 
 @pytest.mark.asyncio
-async def testTuiRunPanelUsesNicePromptTitle(
+async def testTuiRunPanelUsesNiceInputTitle(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify nicePrompt include titles are used for text prompts."""
+    """Verify niceInput titles label text prompts."""
 
-    _writeNicePromptFakeAnsible(tmp_path, monkeypatch)
+    _writeNiceInputFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
     defaults = RuntimeDefaults.forProject(tmp_path)
     savePlaybookConfigs(
@@ -1244,12 +1399,15 @@ async def testTuiRunPanelUsesNicePromptTitle(
         await waitForActivePrompt(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptTitle = pilot.app.query_one("#run-prompt-title", Static)
         promptMessage = pilot.app.query_one("#run-prompt-message", Static)
         promptInput = pilot.app.query_one("#run-prompt-input", Input)
 
-        assert runScreen.activePromptMessage == "Enter DHCP address"
+        assert runScreen.activePromptMessage == "nice input info:"
+        assert runScreen.activePromptTitle == "Enter DHCP address"
         assert runScreen.activePromptMode == "text"
-        assert str(promptMessage.content) == "Enter DHCP address"
+        assert str(promptTitle.content) == "💬 Enter DHCP address"
+        assert str(promptMessage.content) == "nice input info:"
         assert promptInput.display
 
         await pilot.press("1")
@@ -1285,11 +1443,14 @@ async def testTuiRunPanelStartsPromptFromCallbackEvent(
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         promptPanel = pilot.app.query_one("#run-prompt-panel", Container)
         promptInput = pilot.app.query_one("#run-prompt-input", Input)
+        promptTitle = pilot.app.query_one("#run-prompt-title", Static)
         promptMessage = pilot.app.query_one("#run-prompt-message", Static)
 
         assert runScreen.activePromptMessage == "callback supplied prompt text"
+        assert runScreen.activePromptTitle == "Callback prompt"
         assert runScreen.activePromptMode == "continue"
         assert promptPanel.display
+        assert str(promptTitle.content) == "💬 Callback prompt"
         assert str(promptMessage.content) == "callback supplied prompt text"
         assert not promptInput.display
 
@@ -1299,7 +1460,7 @@ async def testTuiRunPanelStartsPromptFromCallbackEvent(
         runProgress = pilot.app.query_one("#run-progress", Static)
         renderedProgress = _renderRich(runProgress.content)
 
-        assert "callback supplied prompt text — continued" in renderedProgress
+        assert "Callback prompt — continued" in renderedProgress
 
 
 @pytest.mark.asyncio
@@ -1395,6 +1556,7 @@ async def testTuiRunPanelRendersMultilinePromptText(
         await waitForActivePrompt(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
+        promptTitle = pilot.app.query_one("#run-prompt-title", Static)
         promptMessage = pilot.app.query_one("#run-prompt-message", Static)
 
         expectedMessage = (
@@ -1402,7 +1564,9 @@ async def testTuiRunPanelRendersMultilinePromptText(
             "Device: /dev/sda\n"
             "Press Enter to continue."
         )
+        assert runScreen.activePromptTitle == "Confirm write"
         assert runScreen.activePromptMessage == expectedMessage
+        assert str(promptTitle.content) == "💬 Confirm write"
         assert isinstance(promptMessage.content, Text)
         assert promptMessage.content.plain == expectedMessage
 
@@ -1412,10 +1576,7 @@ async def testTuiRunPanelRendersMultilinePromptText(
         renderedProgress = _renderRich(
             pilot.app.query_one("#run-progress", Static).content
         )
-        assert (
-            "WARNING: About to write image to device. — continued"
-            in renderedProgress
-        )
+        assert "Confirm write — continued" in renderedProgress
         assert "Device: /dev/sda — continued" not in renderedProgress
 
 
@@ -1737,12 +1898,12 @@ def _writeInputFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
-            print("\\033[0;35mTASK [pause : wait for user input to continue] ********\\033[0m", flush=True)
-            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
-            print("[pause : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [pause : show wait prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceWait.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [pause : niceWait: wait for user input to continue] ********\\033[0m", flush=True)
+            print("[pause : niceWait: wait for user input to continue]", flush=True)
             print("waiting for input", flush=True)
             sys.stdin.readline()
-            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
             print("continued", flush=True)
             sys.exit(0)
             """
@@ -1766,10 +1927,10 @@ def _writeCompletingPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
-            print("\\033[0;35mTASK [pause : wait for user input to continue] ********\\033[0m", flush=True)
-            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
-            print("[pause : wait for user input]", flush=True)
-            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
+            print("\\033[0;35mTASK [pause : show wait prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceWait.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [pause : niceWait: wait for user input to continue] ********\\033[0m", flush=True)
+            print("[pause : niceWait: wait for user input to continue]", flush=True)
             print("ok: [localhost]", flush=True)
             sys.exit(0)
             """
@@ -1794,14 +1955,15 @@ def _writeCustomWaitIncludeFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None
             import sys
 
             print("PLAY [Create RPi Image] ********", flush=True)
-            print("\\033[0;35mTASK [getInstallDevice : Ask and wait for new device to be attached] ********\\033[0m", flush=True)
-            print("included: /tmp/tasks/misc/waitForInput.yaml for 192.168.128.16", flush=True)
+            print("\\033[0;35mTASK [getInstallDevice : ask for external device] ********\\033[0m", flush=True)
+            print("included: /tmp/tasks/misc/niceWait.yaml for 192.168.128.16", flush=True)
             log_path = os.environ.get("ANSIBLE_LOG_PATH")
             if log_path:
                 with open(log_path, "a", encoding="utf-8") as log:
-                    print("2026-08-01 20:12:52,139 p=1 u=test n=ansible INFO| [getInstallDevice : wait for user input]", file=log)
+                    print("2026-08-01 20:12:52,139 p=1 u=test n=ansible INFO| [getInstallDevice : niceWait: Attach external device]", file=log)
                     print("Attach external device & press Enter to continue ... (output is hidden):", file=log, flush=True)
-            print("[getInstallDevice : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [getInstallDevice : niceWait: Attach external device] ********\\033[0m", flush=True)
+            print("[getInstallDevice : niceWait: Attach external device]", flush=True)
             sys.stdin.readline()
             print("\\033[0;35mTASK [getInstallDevice : Get current block devices] ********\\033[0m", flush=True)
             print("ok: [192.168.128.16]", flush=True)
@@ -1824,12 +1986,18 @@ def _writeNiceWaitFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
         "#!/usr/bin/env python3\n"
         + dedent(
             """
+            import os
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
+            print("\\033[0;35mTASK [pause : show wait prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceWait.yaml for localhost", flush=True)
+            log_path = os.environ.get("ANSIBLE_LOG_PATH")
+            if log_path:
+                with open(log_path, "a", encoding="utf-8") as log:
+                    print("2026-08-06 19:00:00,000 p=1 u=test n=ansible INFO| [pause : niceWait: Attach external device]", file=log)
+                    print("nice wait info (output is hidden):", file=log, flush=True)
             print("\\033[0;35mTASK [pause : niceWait: Attach external device] ********\\033[0m", flush=True)
-            print("included: tasks/misc/waitForInput.yaml for localhost", flush=True)
-            print("\\033[0;35mTASK [pause : wait for user input] ********\\033[0m", flush=True)
             sys.stdin.readline()
             print("ok: [localhost]", flush=True)
             sys.exit(0)
@@ -1841,8 +2009,8 @@ def _writeNiceWaitFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("PATH", f"{binDir}:{tmp_path}:{os.environ.get('PATH', '')}")
 
 
-def _writeNicePromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
-    """Write a fake ansible-playbook with a nicePrompt prompt wrapper."""
+def _writeNiceInputFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
+    """Write a fake ansible-playbook with a niceInput prompt wrapper."""
 
     binDir = tmp_path / "bin"
     binDir.mkdir()
@@ -1851,12 +2019,18 @@ def _writeNicePromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
         "#!/usr/bin/env python3\n"
         + dedent(
             """
+            import os
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
-            print("\\033[0;35mTASK [promptForInput : nicePrompt: Enter DHCP address] ********\\033[0m", flush=True)
-            print("included: tasks/misc/promptForInput.yaml for localhost", flush=True)
-            print("\\033[0;35mTASK [promptForInput : prompt for user input] ********\\033[0m", flush=True)
+            print("\\033[0;35mTASK [promptForInput : show DHCP prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceInput.yaml for localhost", flush=True)
+            log_path = os.environ.get("ANSIBLE_LOG_PATH")
+            if log_path:
+                with open(log_path, "a", encoding="utf-8") as log:
+                    print("2026-08-06 19:00:00,000 p=1 u=test n=ansible INFO| [promptForInput : niceInput: Enter DHCP address]", file=log)
+                    print("nice input info:", file=log, flush=True)
+            print("\\033[0;35mTASK [promptForInput : niceInput: Enter DHCP address] ********\\033[0m", flush=True)
             sys.stdin.readline()
             print("ok: [localhost]", flush=True)
             sys.exit(0)
@@ -1888,13 +2062,14 @@ def _writeBracketedPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             )
             print("PLAY [Create RPi Image] ********", flush=True)
             print("\\033[0;35mTASK [createRPiImage : confirm write operation] ********\\033[0m", flush=True)
-            print("included: /tmp/tasks/misc/waitForInput.yaml for 192.168.128.16", flush=True)
+            print("included: /tmp/tasks/misc/niceWait.yaml for 192.168.128.16", flush=True)
             log_path = os.environ.get("ANSIBLE_LOG_PATH")
             if log_path:
                 with open(log_path, "a", encoding="utf-8") as log:
-                    print("2026-08-01 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : wait for user input]", file=log)
+                    print("2026-08-01 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : niceWait: confirm write operation]", file=log)
                     print(f"{prompt} (output is hidden):", file=log, flush=True)
-            print("[createRPiImage : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [createRPiImage : niceWait: confirm write operation] ********\\033[0m", flush=True)
+            print("[createRPiImage : niceWait: confirm write operation]", flush=True)
             sys.stdin.readline()
             print("\\033[0;35mTASK [createRPiImage : write image] ********\\033[0m", flush=True)
             print("ok: [192.168.128.16]", flush=True)
@@ -1921,17 +2096,18 @@ def _writeMultilineWaitFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             import sys
 
             print("PLAY [Create RPi Image] ********", flush=True)
-            print("\\033[0;35mTASK [createRPiImage : niceWait: Confirm write] ********\\033[0m", flush=True)
-            print("included: /tmp/tasks/misc/waitForInput.yaml for 192.168.128.16", flush=True)
+            print("\\033[0;35mTASK [createRPiImage : show write confirmation] ********\\033[0m", flush=True)
+            print("included: /tmp/tasks/misc/niceWait.yaml for 192.168.128.16", flush=True)
             log_path = os.environ.get("ANSIBLE_LOG_PATH")
             if log_path:
                 with open(log_path, "a", encoding="utf-8") as log:
-                    print("2026-08-05 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : wait for user input]", file=log)
+                    print("2026-08-05 20:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : niceWait: Confirm write]", file=log)
                     print("WARNING: About to write image to device.", file=log)
                     print("Device: /dev/sda", file=log)
                     print("Press Enter to continue. (output is hidden):", file=log, flush=True)
                     print("2026-08-05 20:20:25,015 p=1 u=test n=ansible INFO| next log record", file=log, flush=True)
-            print("[createRPiImage : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [createRPiImage : niceWait: Confirm write] ********\\033[0m", flush=True)
+            print("[createRPiImage : niceWait: Confirm write]", flush=True)
             sys.stdin.readline()
             print("\\033[0;35mTASK [createRPiImage : write image] ********\\033[0m", flush=True)
             print("ok: [192.168.128.16]", flush=True)
@@ -1961,7 +2137,7 @@ def _writeEventPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             log_path = os.environ.get("ANSIBLE_LOG_PATH")
             if log_path:
                 with open(log_path, "a", encoding="utf-8") as log:
-                    print("2026-08-02 17:00:00,000 p=1 u=test n=ansible INFO| [pause : wait for user input]", file=log)
+                    print("2026-08-02 17:00:00,000 p=1 u=test n=ansible INFO| [pause : niceWait: Callback prompt]", file=log)
                     print("callback supplied prompt text (output is hidden):", file=log, flush=True)
             event_log_path = os.environ.get("ANSIBLE_RUNNER_EVENT_LOG")
             if event_log_path:
@@ -1972,8 +2148,8 @@ def _writeEventPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
                                 "event": "task_start",
                                 "task": {
                                     "action": "ansible.builtin.pause",
-                                    "name": "pause : wait for user input",
-                                    "path": "/tmp/tasks/misc/waitForInput.yaml:36",
+                                    "name": "pause : niceWait: Callback prompt",
+                                    "path": "/tmp/tasks/misc/niceWait.yaml:36",
                                     "role": "pause",
                                     "uuid": None,
                                 },
@@ -2072,15 +2248,15 @@ def _writeSlowImageWritePromptFakeAnsible(
             )
             print("PLAY [Create RPi Image] ********", flush=True)
             print("\\033[0;35mTASK [createRPiImage : confirm write operation] ********\\033[0m", flush=True)
-            print("included: /tmp/tasks/misc/waitForInput.yaml for 192.168.128.16", flush=True)
+            print("included: /tmp/tasks/misc/niceWait.yaml for 192.168.128.16", flush=True)
             log_path = os.environ.get("ANSIBLE_LOG_PATH")
             if log_path:
                 with open(log_path, "a", encoding="utf-8") as log:
-                    print("2026-08-01 21:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : wait for user input]", file=log)
+                    print("2026-08-01 21:20:24,015 p=1 u=test n=ansible INFO| [createRPiImage : niceWait: confirm write operation]", file=log)
                     print(f"{prompt} (output is hidden):", file=log, flush=True)
-            print("[createRPiImage : wait for user input]", flush=True)
+            print("\\033[0;35mTASK [createRPiImage : niceWait: confirm write operation] ********\\033[0m", flush=True)
+            print("[createRPiImage : niceWait: confirm write operation]", flush=True)
             sys.stdin.readline()
-            print("\\033[0;35mTASK [createRPiImage : wait for user input] ********\\033[0m", flush=True)
             print("ok: [192.168.128.16]", flush=True)
             time.sleep(0.4)
             print("\\033[0;35mTASK [createRPiImage : write image to device] ********\\033[0m", flush=True)
@@ -2135,9 +2311,9 @@ def _writePromptValueFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
-            print("\\033[0;35mTASK [promptForInput : Prompt for DHCP-assigned IP] ********\\033[0m", flush=True)
-            print("included: tasks/misc/promptForInput.yaml for localhost", flush=True)
-            print("\\033[0;35mTASK [promptForInput : prompt for user input] ********\\033[0m", flush=True)
+            print("\\033[0;35mTASK [promptForInput : show DHCP prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceInput.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [promptForInput : niceInput: Prompt for DHCP-assigned IP] ********\\033[0m", flush=True)
             print("Host [installer] not reachable on port 22.", flush=True)
             print("Enter the DHCP-assigned IP for this host", flush=True)
             value = sys.stdin.readline().rstrip("\\n")
@@ -2165,10 +2341,10 @@ def _writeUndefinedPromptFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:
             import sys
 
             print("PLAY [Prompt play] ********", flush=True)
-            print("\\033[0;35mTASK [promptForInput : Prompt for user input] ********\\033[0m", flush=True)
-            print("included: tasks/misc/promptForInput.yaml for localhost", flush=True)
-            print("\\033[0;35mTASK [promptForInput : prompt for user input] ********\\033[0m", flush=True)
-            print("[ERROR]: Task failed: Error while resolving value for 'prompt': 'promptMsg' is undefined", flush=True)
+            print("\\033[0;35mTASK [promptForInput : show input prompt] ********\\033[0m", flush=True)
+            print("included: tasks/misc/niceInput.yaml for localhost", flush=True)
+            print("\\033[0;35mTASK [promptForInput : niceInput: Prompt for user input] ********\\033[0m", flush=True)
+            print("[ERROR]: Task failed: Error while resolving value for 'data': 'data' is undefined", flush=True)
             print("fatal: [localhost]: FAILED! => {\\\"changed\\\": false}", flush=True)
             sys.exit(2)
             """
