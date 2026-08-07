@@ -510,6 +510,58 @@ def testTuiRunPanelHidesNiceWaitCallbackTaskRow(tmp_path: Path) -> None:
     assert "niceWait: Sample nice wait" not in renderedProgress
 
 
+def testTuiRunPanelSuppressesNiceInputFollowupTasks(tmp_path: Path) -> None:
+    """Verify niceInput helper set_fact tasks do not start extra prompts."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Test a few roles"},
+        }
+    )
+    for taskName, lineNumber in (
+        ("niceInput: Sample nice input", 41),
+        ("Set userInput fact", 47),
+        ("Cleanup temporary facts", 51),
+    ):
+        runScreen._processEventRecord(
+            {
+                "event": "task_start",
+                "task": {
+                    "action": "ansible.builtin.pause"
+                    if taskName.startswith("niceInput:")
+                    else "ansible.builtin.set_fact",
+                    "name": taskName,
+                    "path": f"/tmp/tasks/misc/niceInput.yaml:{lineNumber}",
+                    "role": None,
+                },
+            }
+        )
+
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert startedPrompts == [
+        ("Sample nice input", "text", "Sample nice input"),
+    ]
+    assert "Set userInput fact" not in renderedProgress
+    assert "Cleanup temporary facts" not in renderedProgress
+
+
 def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
     """Verify top-level niceDisplay includes do not jump ahead of role rows."""
 

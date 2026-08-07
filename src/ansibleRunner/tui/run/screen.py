@@ -593,10 +593,12 @@ class RunScreen(Container):
         if wrapperKind == "display":
             return True
         if wrapperKind == "wait":
-            self._startPromptFromEvent(task, "continue")
+            if self._promptModeFromTaskName(self._taskNameWithoutRole(task)) == "continue":
+                self._startPromptFromEvent(task, "continue")
             return True
         if wrapperKind == "input":
-            self._startPromptFromEvent(task, "text")
+            if self._promptModeFromTaskName(self._taskNameWithoutRole(task)) == "text":
+                self._startPromptFromEvent(task, "text")
             return True
         return False
 
@@ -639,6 +641,15 @@ class RunScreen(Container):
         if not roleName or " : " in taskName:
             return taskName
         return f"{roleName} : {taskName}"
+
+    @staticmethod
+    def _taskNameWithoutRole(task: dict[str, object]) -> str:
+        """Return callback task name without a role prefix."""
+
+        taskName = str(task.get("name") or "").strip()
+        if " : " in taskName:
+            return taskName.split(" : ", 1)[1].strip()
+        return taskName
 
     @staticmethod
     def _isStructuralIncludeTask(task: dict[str, object]) -> bool:
