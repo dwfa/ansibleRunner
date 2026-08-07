@@ -55,7 +55,8 @@ python3 install.py
 
 The installer creates `.venv`, installs `ansibleRunner`, installs runtime
 dependencies including `ansible-core`, and writes `ar.py` as a thin project
-launcher.
+launcher. During the install step it reports the package version it resolved
+from the selected wheel or release asset.
 
 Package source selection:
 
@@ -109,6 +110,19 @@ You can also point the installer at a specific local wheel:
 
 ```shell
 python3 install.py -w ./ansiblerunner-<version>-py3-none-any.whl
+```
+
+Force reinstall the same version when you rebuilt or re-downloaded a wheel with
+the same package version:
+
+```shell
+python3 install.py --force-reinstall
+```
+
+You can combine it with an explicit wheel:
+
+```shell
+python3 install.py -w ./ansiblerunner-<version>-py3-none-any.whl --force-reinstall
 ```
 
 `-w` and `--whl` are shorthand for `--package-spec`. Use `--package-spec`

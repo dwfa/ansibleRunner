@@ -155,6 +155,16 @@ def testPackageSpecCanBeOverridden() -> None:
     assert installer.getPackageSpec(args) == "/tmp/ansibleRunner"
 
 
+def testPackageVersionIsDescribedFromWheelSpec() -> None:
+    """Verify installer status can report the wheel version being installed."""
+
+    installer = _loadInstallerModule()
+
+    assert installer.describePackageSpec(
+        "ansibleRunner @ https://example.test/ansiblerunner-9.9.9-py3-none-any.whl"
+    ) == "Package: ansibleRunner 9.9.9"
+
+
 def testInstallerUiAlignsStatusMarkerInStatusColumn() -> None:
     """Verify installer status markers are aligned away from step text."""
 
@@ -249,6 +259,41 @@ def testInstallPackageUsesVenvPip(monkeypatch: Any, tmp_path: Path) -> None:
             "--upgrade",
             "--disable-pip-version-check",
             "ansibleRunner @ https://example.test/ansiblerunner-9.9.9-py3-none-any.whl",
+        ]
+    ]
+
+
+def testInstallPackageCanForceReinstall(monkeypatch: Any, tmp_path: Path) -> None:
+    """Verify same-version reinstalls can be forced through pip."""
+
+    installer = _loadInstallerModule()
+    calls: list[list[str]] = []
+
+    def fakeRun(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Capture subprocess calls."""
+
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(installer.subprocess, "run", fakeRun)
+
+    installer.installPackage(
+        Path("/project/.venv/bin/python"),
+        "/downloads/ansiblerunner-1.0.7-py3-none-any.whl",
+        tmp_path / "logs" / "install.log",
+        forceReinstall=True,
+    )
+
+    assert calls == [
+        [
+            "/project/.venv/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--disable-pip-version-check",
+            "--force-reinstall",
+            "/downloads/ansiblerunner-1.0.7-py3-none-any.whl",
         ]
     ]
 

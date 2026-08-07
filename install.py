@@ -404,7 +404,16 @@ def main(argv: list[str] | None = None) -> int:
         ui.finishStep()
 
         ui.step("📦 Install ansibleRunner")
-        installPackage(venvPython, packageSpec, logPath, args.verbose)
+        ui.substep(describePackageSpec(packageSpec))
+        if args.forceReinstall:
+            ui.substep("Mode: force reinstall")
+        installPackage(
+            venvPython,
+            packageSpec,
+            logPath,
+            args.verbose,
+            args.forceReinstall,
+        )
         ui.substep(f"Installed {PACKAGE_NAME}")
         ui.finishStep()
 
@@ -515,6 +524,13 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("ANSIBLE_RUNNER_INSTALL_VERBOSE") == "1",
         help="Show venv and pip output instead of writing it only to the log.",
     )
+    parser.add_argument(
+        "--force-reinstall",
+        dest="forceReinstall",
+        action="store_true",
+        default=os.environ.get("ANSIBLE_RUNNER_FORCE_REINSTALL") == "1",
+        help="Force pip to reinstall ansibleRunner even when the same version is installed.",
+    )
     return parser.parse_args(argv)
 
 
@@ -541,6 +557,28 @@ def getPackageSpec(
         wheelUrl = args.wheelUrl or latestReleaseWheelUrl()
         return f"{PACKAGE_NAME} @ {wheelUrl}"
     return f"{PACKAGE_NAME} @ git+{args.repoUrl}@{args.ref}"
+
+
+def describePackageSpec(packageSpec: str) -> str:
+    """Return a compact user-facing package/version description."""
+
+    version = packageVersionFromSpec(packageSpec)
+    if version:
+        return f"Package: {PACKAGE_NAME} {version}"
+    return f"Package: {packageSpec}"
+
+
+def packageVersionFromSpec(packageSpec: str) -> str | None:
+    """Return the ansibleRunner version implied by a wheel package spec."""
+
+    match = re.search(
+        r"ansiblerunner-(\d+(?:\.\d+)*)-py3-none-any\.whl",
+        packageSpec,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    return None
 
 
 def findLocalWheel(installerRoot: Path | None) -> Path | None:
@@ -660,6 +698,7 @@ def installPackage(
     packageSpec: str,
     logPath: Path,
     verbose: bool = False,
+    forceReinstall: bool = False,
 ) -> None:
     """Install ansibleRunner into the virtual environment.
 
@@ -677,8 +716,10 @@ def installPackage(
         "install",
         "--upgrade",
         "--disable-pip-version-check",
-        packageSpec,
     ]
+    if forceReinstall:
+        command.append("--force-reinstall")
+    command.append(packageSpec)
     runLoggedCommand(command, logPath, "Install ansibleRunner", verbose)
 
 
