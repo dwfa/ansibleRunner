@@ -38,9 +38,11 @@ from textual.widgets import Input, Static
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig, PlaybookEntry
 from ansibleRunner.playbooks.playbookConfig import buildRunnerArgv
+from ansibleRunner.tui.markup import renderArMarkup, stripArMarkup
 from ansibleRunner.progressParser import (
     ANSI_PATTERN,
     AnsibleProgressParser,
+    AR_HIDE_HINT_PATTERN,
     INCLUDED_PATTERN,
     OutputLevel,
     PrettyOutput,
@@ -565,15 +567,12 @@ class RunScreen(Container):
         task = eventRecord.get("task")
         if not isinstance(task, dict):
             return
-        if self._niceWrapperKindFromTask(task) == "display":
+        wrapperKind = self._niceWrapperKindFromTask(task)
+        if wrapperKind == "display":
             self._startPrettyOutputAnchor(task, now)
             return
         wrapperKind = self._niceWrapperKindFromPath(str(task.get("path") or ""))
-        if wrapperKind == "wait":
-            self._startPromptFromEvent(task, "continue")
-            return
-        if wrapperKind == "input":
-            self._startPromptFromEvent(task, "text")
+        if self._processNiceWrapperTaskStart(task, wrapperKind):
             return
         if self._isStructuralIncludeTask(task):
             return
@@ -583,6 +582,23 @@ class RunScreen(Container):
                 f"TASK [{taskHeader}] ********",
                 now,
             )
+
+    def _processNiceWrapperTaskStart(
+        self,
+        task: dict[str, object],
+        wrapperKind: NiceWrapperKind | None,
+    ) -> bool:
+        """Handle internal task starts from supported nice wrapper files."""
+
+        if wrapperKind == "display":
+            return True
+        if wrapperKind == "wait":
+            self._startPromptFromEvent(task, "continue")
+            return True
+        if wrapperKind == "input":
+            self._startPromptFromEvent(task, "text")
+            return True
+        return False
 
     def _processIncludeEvent(self, include: dict[str, object]) -> None:
         """Process one structured include callback event."""
@@ -678,14 +694,14 @@ class RunScreen(Container):
         taskName = cls._stripNiceDisplayTitlePrefix(taskName)
         return taskName or "Display"
 
-    @staticmethod
-    def _stripNiceDisplayTitlePrefix(title: str) -> str:
+    @classmethod
+    def _stripNiceDisplayTitlePrefix(cls, title: str) -> str:
         """Remove the niceDisplay task-name title prefix."""
 
         strippedTitle = title.strip()
         if strippedTitle.lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
-            return strippedTitle[len(NICE_DISPLAY_TITLE_PREFIX) :].strip()
-        return strippedTitle
+            return cls._stripArHideHint(strippedTitle[len(NICE_DISPLAY_TITLE_PREFIX) :])
+        return cls._stripArHideHint(strippedTitle)
 
     def _detectPrettyOutputInclude(self, line: str) -> None:
         """Detect native output for the display wrapper include."""
@@ -992,7 +1008,11 @@ class RunScreen(Container):
         for row in self.progressRows:
             if row.output is None:
                 continue
-            blocks.append(f"{row.output.title}\n{row.output.body}".rstrip())
+            title = stripArMarkup(row.output.title)
+            body = stripArMarkup(row.output.body)
+            blocks.append(
+                f"{title}\n{body}".rstrip()
+            )
         return "\n\n".join(blocks)
 
     @staticmethod
@@ -1056,10 +1076,10 @@ class RunScreen(Container):
         """Render a pretty output block preserving its body text."""
 
         return Panel(
-            Text(output.body),
+            renderArMarkup(output.body),
             box=box.ROUNDED,
             border_style="cyan",
-            title=Text(output.title, style="cyan"),
+            title=renderArMarkup(output.title, "cyan"),
             title_align="left",
         )
 
@@ -1190,7 +1210,7 @@ class RunScreen(Container):
     def _syntheticTaskAfterPrompt(self, message: str) -> tuple[str, set[str]] | None:
         """Return predicted work that follows a known prompt message."""
 
-        normalizedMessage = message.lower()
+        normalizedMessage = stripArMarkup(message).lower()
         currentRole = self.progressParser.currentRole
         if (
             currentRole is None
@@ -1217,10 +1237,12 @@ class RunScreen(Container):
         displayTitle = self.activePromptTitle or self._defaultPromptTitle(
             self.activePromptMode or "continue"
         )
-        promptPanel.border_title = f"💬 {displayTitle}"
-        self.query_one("#run-prompt-title", Static).update(Text(f"💬 {displayTitle}"))
+        promptPanel.border_title = f"💬 {stripArMarkup(displayTitle)}"
+        self.query_one("#run-prompt-title", Static).update(
+            renderArMarkup(f"💬 {displayTitle}")
+        )
         self.query_one("#run-prompt-message", Static).update(
-            Text(self.activePromptMessage)
+            renderArMarkup(self.activePromptMessage)
         )
         if self.activePromptMode == "text":
             promptInput.display = True
@@ -1345,10 +1367,10 @@ class RunScreen(Container):
         """Return a compact one-line prompt message for progress rows."""
 
         for line in message.splitlines():
-            summary = line.strip()
+            summary = stripArMarkup(line).strip()
             if summary:
                 return summary
-        return message.strip()
+        return stripArMarkup(message).strip()
 
     @classmethod
     def _promptTitleFromTaskName(cls, taskName: str) -> str | None:
@@ -1358,8 +1380,14 @@ class RunScreen(Container):
         normalizedName = strippedName.lower()
         for prefix in PROMPT_TITLE_PREFIXES:
             if normalizedName.startswith(prefix):
-                return strippedName[len(prefix) :].strip()
+                return cls._stripArHideHint(strippedName[len(prefix) :])
         return None
+
+    @staticmethod
+    def _stripArHideHint(value: str) -> str:
+        """Remove AR-only display hints from a prompt/display label."""
+
+        return AR_HIDE_HINT_PATTERN.sub(" ", value).strip()
 
     @classmethod
     def _promptModeFromTaskName(cls, taskName: str) -> PromptMode | None:

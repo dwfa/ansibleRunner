@@ -420,7 +420,11 @@ class AnsibleProgressParser:
     def _hasVisibleTaskOutput(item: ProgressItem) -> bool:
         """Return whether an item has child task output blocks."""
 
-        return any(task.outputs for task in item.tasks)
+        return any(task.outputs for task in item.tasks) or any(
+            task.outputs
+            for role in item.roles
+            for task in role.tasks
+        )
 
     def _finalizeRole(self, now: float) -> None:
         """Finalize the active role."""

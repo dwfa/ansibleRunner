@@ -89,6 +89,45 @@ def createRunScreen(projectRoot: Path) -> RunScreen:
     )
 
 
+def testNiceWrapperTitlesStripArHideHint() -> None:
+    """Verify AR display hints do not leak into nice wrapper titles."""
+
+    assert (
+        RunScreen._promptTitleFromTaskName("niceWait: Confirm write @ar:hide")
+        == "Confirm write"
+    )
+    assert (
+        RunScreen._promptTitleFromTaskName("niceInput: Enter value @ar:hide")
+        == "Enter value"
+    )
+    assert (
+        RunScreen._stripNiceDisplayTitlePrefix(
+            "niceDisplay: Provisioning complete @ar:hide"
+        )
+        == "Provisioning complete"
+    )
+
+
+def testPrettyOutputClipboardTextStripsArMarkup(tmp_path: Path) -> None:
+    """Verify copying niceDisplay output returns plain text."""
+
+    runScreen = createRunScreen(tmp_path)
+    runScreen.progressParser.processLine("PLAY [site] ********", now=1.0)
+    runScreen.progressParser.processLine(
+        "TASK [niceDisplay: {green}Done{/green}] ********",
+        now=2.0,
+    )
+    runScreen.progressParser.recordTaskOutput(
+        "niceDisplay: {green}Done{/green}",
+        "{green}Done{/green}",
+        "status = {green}ok{/green}",
+        hideTaskRow=True,
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(monotonic())
+
+    assert runScreen._prettyOutputClipboardText() == "Done\nstatus = ok"
+
+
 async def waitForRunComplete(pilot: Any, cycles: int = 100) -> None:
     """Wait for the run screen worker to finish.
 
@@ -243,6 +282,80 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
         "----  --------\n"
         "db1   East US"
     )
+
+
+def testTuiRunPanelRendersTopLevelNiceDisplayInHiddenPlay(tmp_path: Path) -> None:
+    """Verify top-level niceDisplay output renders when the play row is hidden."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Play 2 Test a few more tasks @ar:hide"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "show niceDisplay sample",
+                "path": "/tmp/playbooks/test-pb.yaml:67",
+                "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "show niceDisplay sample",
+                    "path": "/tmp/playbooks/test-pb.yaml:67",
+                    "role": None,
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.debug",
+                "name": "niceDisplay: Sample table output",
+                "path": "/tmp/tasks/misc/niceDisplay.yaml:15",
+                "role": None,
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "changed": False,
+                "msg": "NAME        STATUS\n----------  -------\ntest-one    {red}ok{/red}",
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "niceDisplay: Sample table output",
+                    "path": "/tmp/tasks/misc/niceDisplay.yaml:15",
+                    "role": None,
+                },
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert "Play 2 Test a few more tasks" not in renderedProgress
+    assert "Sample table output" in renderedProgress
+    assert "NAME        STATUS" in renderedProgress
+    assert "test-one    ok" in renderedProgress
+    assert "niceDisplay:" not in renderedProgress
 
 
 def testTuiRunPanelKeepsNiceDisplayInTaskOrder(tmp_path: Path) -> None:

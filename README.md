@@ -306,8 +306,42 @@ Prompt display rules:
   treated as a text prompt.
 - Native Ansible prompt text from the run log wins when present.
 - Multiline prompt text is preserved in the input panel.
-- The internal wrapper task rows are hidden from the progress tree.
+- Internal `nice*` wrapper task rows are hidden from the progress tree.
 - Completed prompt interactions remain visible in normal role/task progress.
+
+### AR Markup
+
+`title` and `data` values for `niceWait`, `niceInput`, and `niceDisplay` may
+use AR-only style tags. The tags are rendered by the TUI and stripped from
+copy/prompt summaries. Plain `ansible-playbook` output still shows the tags as
+ordinary text.
+
+Supported tags:
+
+```text
+{bold}...{/bold}
+{dim}...{/dim}
+{red}...{/red}
+{green}...{/green}
+{yellow}...{/yellow}
+{blue}...{/blue}
+{magenta}...{/magenta}
+{cyan}...{/cyan}
+{white}...{/white}
+```
+
+Example:
+
+```yaml
+vars:
+  title: "{green}Provision complete{/green}"
+  data: |
+    server = {cyan}example-db-01{/cyan}
+    status = {green}deleted{/green}
+```
+
+AR uses `{style}` tags instead of Rich-style `[style]` tags so normal Ansible
+values like `[example-db-01]` and `[/tmp/currentRPiImage.img]` remain safe.
 
 ### niceDisplay
 
@@ -335,7 +369,7 @@ Display rules:
 
 - The reusable wrapper task uses `niceDisplay:` in its own task name so AR can
   read the title from Ansible output.
-- The include row and internal display task row are hidden.
+- The include row and internal `niceDisplay` task row are hidden.
 - Only the boxed title and payload are shown.
 - `niceDisplay:` is stripped from the boxed title.
 - At `--output-level role`, ordinary task rows remain hidden.
