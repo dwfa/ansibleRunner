@@ -1,11 +1,11 @@
 ##############################################################################
-# Default runtime paths for project-local logs and state.
+# Default runtime paths for ansibleRunner logs, state, and playbooks.
 #
 # USAGE:
-#   RuntimeDefaults.forProject(projectRoot)
+#   RuntimeDefaults.forArPath(arPath, pbPath)
 #
 # OUTPUT VARIABLES:
-#   - RuntimeDefaults: Resolved project, log, and state paths.
+#   - RuntimeDefaults: Resolved runner, playbook, log, and state paths.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
 # Licensed under Apache License 2.0. See LICENSE.md for details.
@@ -14,7 +14,7 @@
 # Date: July 05, 2026
 ##############################################################################
 
-"""Default runtime paths for logs and state."""
+"""Default runtime paths for logs, state, and playbook discovery."""
 
 from __future__ import annotations
 
@@ -24,32 +24,45 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class RuntimeDefaults:
-    """Resolved project-local runtime paths.
+    """Resolved ansibleRunner runtime paths.
 
     Args:
-        projectRoot: Resolved project root.
-        logDir: Default directory for runtime logs.
-        stateDir: Default directory for state files.
+        arPath: Directory that anchors runtime state, logs, and command cwd.
+        pbPath: Directory that anchors playbook discovery.
+        logDir: Directory for runtime logs.
+        stateDir: Directory for state files.
     """
 
-    projectRoot: Path
+    arPath: Path
+    pbPath: Path
     logDir: Path
     stateDir: Path
 
     @classmethod
-    def forProject(cls, projectRoot: str | Path) -> "RuntimeDefaults":
-        """Resolve runtime defaults for a project root.
+    def forArPath(
+        cls,
+        arPath: str | Path,
+        pbPath: str | Path | None = None,
+    ) -> "RuntimeDefaults":
+        """Resolve runtime defaults for an ansibleRunner anchor path.
 
         Args:
-            projectRoot: Project root to resolve.
+            arPath: Directory that owns logs, state, and runner cwd.
+            pbPath: Optional playbook root. Defaults to ``arPath/playbooks``.
 
         Returns:
-            Runtime defaults rooted under the given project.
+            Runtime defaults rooted under the given ansibleRunner path.
         """
 
-        root = Path(projectRoot).expanduser().resolve()
+        runnerPath = Path(arPath).expanduser().resolve()
+        playbookPath = (
+            Path(pbPath).expanduser().resolve()
+            if pbPath is not None
+            else runnerPath / "playbooks"
+        )
         return cls(
-            projectRoot=root,
-            logDir=root / "logs",
-            stateDir=root / ".ansibleRunner" / "state",
+            arPath=runnerPath,
+            pbPath=playbookPath,
+            logDir=runnerPath / "logs",
+            stateDir=runnerPath / ".ansibleRunner" / "state",
         )

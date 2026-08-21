@@ -4,11 +4,11 @@
 #
 # USAGE:
 #   cd /path/to/ansible/project
-#   ./ansibleRunnerShim.py --list-defaults
+#   ./ansibleRunnerShim.py --listDefaults
 #
 # WORKFLOW:
-#   1. Treat the current working directory as the Ansible project root.
-#   2. Create .venv under the project root when needed.
+#   1. Treat the current working directory as the ansibleRunner path.
+#   2. Create .venv under the ansibleRunner path when needed.
 #   3. Install ansibleRunner from the local test wheel.
 #   4. Run the installed ansibleRunner toolkit under the project .venv.
 #
@@ -53,10 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     """
 
     args = list(sys.argv[1:] if argv is None else argv)
-    projectRoot = Path.cwd().resolve()
-    venvDir = projectRoot / ".venv"
+    arPath = Path.cwd().resolve()
+    venvDir = arPath / ".venv"
     venvPython = getVenvPython(venvDir)
-    logPath = getLogPath(projectRoot)
+    logPath = getLogPath(arPath)
 
     ensureVenv(venvDir)
     installPackage(venvPython, logPath)
@@ -65,25 +65,25 @@ def main(argv: list[str] | None = None) -> int:
         str(venvPython),
         "-m",
         PACKAGE_NAME,
-        "--project-root",
-        str(projectRoot),
+        "--arPath",
+        str(arPath),
         *args,
     ]
     return subprocess.run(command, check=False).returncode
 
 
-def getLogPath(projectRoot: Path) -> Path:
+def getLogPath(arPath: Path) -> Path:
     """Return a project-local shim log path.
 
     Args:
-        projectRoot: Ansible project root.
+        arPath: ansibleRunner path.
 
     Returns:
         Log path under ``logs``.
     """
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return projectRoot / "logs" / f"shim-{timestamp}.log"
+    return arPath / "logs" / f"shim-{timestamp}.log"
 
 
 def installPackage(pythonBin: Path, logPath: Path) -> None:

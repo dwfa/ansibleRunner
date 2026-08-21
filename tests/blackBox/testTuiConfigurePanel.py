@@ -34,18 +34,22 @@ from ansibleRunner.tui.configure.screen import ConfigureScreen, ConfigureTable
 from ansibleRunner.tui.playbooks.screen import PlaybookMenuScreen
 
 
-def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
+def createPlaybook(arPath: Path, name: str = "site-pb") -> None:
     """Create a minimal playbook fixture.
 
     Args:
-        projectRoot: Temporary project root.
+        arPath: Temporary ansibleRunner path.
         name: Playbook stem without suffix.
     """
 
-    playbookDir = projectRoot / "playbooks"
+    playbookDir = arPath / "playbooks"
     playbookDir.mkdir(exist_ok=True)
     (playbookDir / f"{name}.yaml").write_text(
-        "# Configure DNS services\n---\n",
+        "# Configure DNS services\n"
+        "---\n"
+        "- name: Configure DNS services\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
         encoding="utf-8",
     )
 
@@ -55,7 +59,7 @@ async def testTuiConfigurePanelOpensForSelectedPlaybook(tmp_path: Path) -> None:
     """Verify configure opens for the highlighted playbook."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -88,7 +92,7 @@ async def testTuiConfigurePanelShowsNodeBesidePlaybookName(tmp_path: Path) -> No
     """Verify saved node context appears beside the playbook name."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="defN")},
@@ -110,7 +114,7 @@ async def testTuiConfigurePanelEditsNodeHost(tmp_path: Path) -> None:
     """Verify node can be edited inline from the config table."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("c")
@@ -130,7 +134,7 @@ async def testTuiConfigurePanelEnterStartsInlineNodeEdit(tmp_path: Path) -> None
     """Verify pressing Enter starts node editing in the selected row."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("c")
@@ -153,7 +157,7 @@ async def testTuiConfigurePanelEditKeepsExistingNodeVisible(tmp_path: Path) -> N
     """Verify editing an existing node keeps its value visible."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="preinstaller")},
@@ -175,7 +179,7 @@ async def testTuiConfigurePanelSupportsCursorEditingInTextFields(
     """Verify cursor keys edit inside node text instead of appending only."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("c")
@@ -206,7 +210,7 @@ async def testTuiConfigurePanelArrowsDoNotEditNode(tmp_path: Path) -> None:
     """Verify left/right do not open or mutate node editing."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("c")
@@ -225,7 +229,7 @@ async def testTuiConfigurePanelCyclesEditableValues(tmp_path: Path) -> None:
     """Verify configure fields can be changed in the panel."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -247,7 +251,7 @@ async def testTuiConfigurePanelSavePersistsAndRefreshesMenu(tmp_path: Path) -> N
     """Verify saving configure writes state and returns to refreshed menu."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -269,7 +273,7 @@ async def testTuiConfigurePanelSavePersistsAndRefreshesMenu(tmp_path: Path) -> N
         assert configs["site-pb"].debug is True
         assert configs["site-pb"].node == "dns"
         assert configs["site-pb"].outputLevel == "task"
-        assert refreshedTable.get_cell_at((0, 3)) == "-d -n dns --output-level task"
+        assert refreshedTable.get_cell_at((0, 3)) == "-d -n dns --outputLevel task"
 
 
 @pytest.mark.asyncio
@@ -277,7 +281,7 @@ async def testTuiConfigurePanelCancelDoesNotPersist(tmp_path: Path) -> None:
     """Verify cancel returns to the menu without writing state."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -301,7 +305,7 @@ async def testTuiConfigurePanelKeyboardFlow(tmp_path: Path) -> None:
     """Verify keyboard commands open, edit, and leave configure."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("c")

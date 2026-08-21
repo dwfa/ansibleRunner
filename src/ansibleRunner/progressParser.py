@@ -231,6 +231,19 @@ class AnsibleProgressParser:
 
         self._suppressCurrentTask(now)
 
+    def suppressTask(self, taskHeader: str, now: float) -> None:
+        """Suppress a task by header as structural/internal output."""
+
+        if self._matchesCurrentTask(taskHeader):
+            self._suppressCurrentTask(now)
+            return
+        targetTask = self._findTaskByHeader(taskHeader)
+        if targetTask is None:
+            return
+        targetTask.hidden = True
+        targetTask.sawResult = True
+        targetTask.sawExecutedResult = False
+
     def startSyntheticTask(
         self,
         taskHeader: str,
@@ -276,6 +289,13 @@ class AnsibleProgressParser:
             },
         )
 
+    def resultAppliesToCurrentTask(self, taskHeader: str) -> bool:
+        """Return whether a structured result belongs to the active task."""
+
+        return self._matchesCurrentTask(taskHeader) or self._matchesSyntheticTaskAlias(
+            taskHeader
+        )
+
     def _appendPlayRows(
         self,
         rows: list[ProgressRow],
@@ -292,95 +312,138 @@ class AnsibleProgressParser:
             rows.append(self._row(0, "🎭", play, now, isActive))
         if self.outputLevel == "play":
             return
+        playChildren: list[tuple[float, int, str, ProgressItem, bool]] = []
         if self.outputLevel == "task" or not self._hasVisibleTaskOutput(play):
-            for interaction in play.interactions:
+            playChildren.extend(
+                (
+                    interaction.startTime,
+                    len(playChildren),
+                    "interaction",
+                    interaction,
+                    False,
+                )
+                for interaction in play.interactions
+            )
+        playChildren.extend(
+            (role.startTime, len(playChildren), "role", role, False)
+            for role in play.roles
+        )
+        if isActive and self.currentRole is not None:
+            playChildren.append(
+                (
+                    self.currentRole.startTime,
+                    len(playChildren),
+                    "role",
+                    self.currentRole,
+                    True,
+                )
+            )
+        if self.outputLevel == "task" or self._hasVisibleTaskOutput(play):
+            playChildren.extend(
+                (task.startTime, len(playChildren), "task", task, False)
+                for task in play.tasks
+            )
+        if isActive and self.currentRole is None and self.currentTask is not None:
+            playChildren.append(
+                (
+                    self.currentTask.startTime,
+                    len(playChildren),
+                    "task",
+                    self.currentTask,
+                    True,
+                )
+            )
+        for _startTime, _index, childKind, child, childIsActive in sorted(
+            playChildren,
+            key=lambda child: (child[0], child[1]),
+        ):
+            if childKind == "role":
+                self._appendRoleRows(rows, baseDepth, child, now, childIsActive)
+            elif childKind == "interaction":
                 rows.append(
                     self._row(
                         max(0, baseDepth + 1),
                         "💬",
-                        interaction,
+                        child,
                         now,
-                        False,
+                        childIsActive,
                     )
                 )
-        for role in play.roles:
-            roleDepth = max(0, baseDepth + 1)
-            taskDepth = roleDepth + 1
-            if not role.hidden:
-                rows.append(self._row(roleDepth, "⚙", role, now, False))
-            else:
-                taskDepth = roleDepth
-            if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
-                for task in role.tasks:
-                    self._appendTaskRows(
-                        rows,
-                        taskDepth,
-                        task,
-                        now,
-                        False,
-                        showTask=self.outputLevel == "task",
-                    )
-            if self.outputLevel == "task" or not self._hasVisibleTaskOutput(role):
-                for interaction in role.interactions:
-                    rows.append(self._row(taskDepth, "💬", interaction, now, False))
-        if isActive and self.currentRole is not None:
-            roleDepth = max(0, baseDepth + 1)
-            taskDepth = roleDepth + 1
-            if not self.currentRole.hidden:
-                rows.append(self._row(roleDepth, "⚙", self.currentRole, now, True))
-            else:
-                taskDepth = roleDepth
-            if self.outputLevel == "task" or self._hasVisibleTaskOutput(
-                self.currentRole
+            elif self._taskIsVisible(child) and (
+                self.outputLevel == "task" or bool(child.outputs)
             ):
-                for task in self.currentRole.tasks:
-                    self._appendTaskRows(
-                        rows,
-                        taskDepth,
-                        task,
-                        now,
-                        False,
-                        showTask=self.outputLevel == "task",
-                    )
-            if self.outputLevel == "task" or not self._hasVisibleTaskOutput(
-                self.currentRole
-            ):
-                for interaction in self.currentRole.interactions:
-                    rows.append(self._row(taskDepth, "💬", interaction, now, False))
-            if (
-                self.currentTask is not None
-                and self._taskIsVisible(self.currentTask)
-                and (self.outputLevel == "task" or bool(self.currentTask.outputs))
+                self._appendTaskRows(
+                    rows,
+                    max(0, baseDepth + 1),
+                    child,
+                    now,
+                    childIsActive,
+                    showTask=self.outputLevel == "task",
+                )
+
+    def _appendRoleRows(
+        self,
+        rows: list[ProgressRow],
+        baseDepth: int,
+        role: ProgressItem,
+        now: float,
+        isActive: bool,
+    ) -> None:
+        """Append one role and visible descendant rows."""
+
+        roleDepth = max(0, baseDepth + 1)
+        taskDepth = roleDepth + 1
+        if not role.hidden:
+            rows.append(self._row(roleDepth, "⚙", role, now, isActive))
+        else:
+            taskDepth = roleDepth
+        roleChildren: list[tuple[float, int, str, ProgressItem, bool]] = []
+        if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
+            roleChildren.extend(
+                (task.startTime, len(roleChildren), "task", task, False)
+                for task in role.tasks
+            )
+        if self.outputLevel == "task" or not self._hasVisibleTaskOutput(role):
+            roleChildren.extend(
+                (
+                    interaction.startTime,
+                    len(roleChildren),
+                    "interaction",
+                    interaction,
+                    False,
+                )
+                for interaction in role.interactions
+            )
+        if (
+            isActive
+            and self.currentTask is not None
+            and self._taskIsVisible(self.currentTask)
+            and (self.outputLevel == "task" or bool(self.currentTask.outputs))
+        ):
+            roleChildren.append(
+                (
+                    self.currentTask.startTime,
+                    len(roleChildren),
+                    "task",
+                    self.currentTask,
+                    True,
+                )
+            )
+        for _startTime, _index, childKind, child, childIsActive in sorted(
+            roleChildren,
+            key=lambda child: (child[0], child[1]),
+        ):
+            if childKind == "interaction":
+                rows.append(self._row(taskDepth, "💬", child, now, childIsActive))
+            elif self._taskIsVisible(child) and (
+                self.outputLevel == "task" or bool(child.outputs)
             ):
                 self._appendTaskRows(
                     rows,
                     taskDepth,
-                    self.currentTask,
+                    child,
                     now,
-                    True,
-                    showTask=self.outputLevel == "task",
-                )
-        elif isActive and self.currentTask is not None:
-            if (
-                self._taskIsVisible(self.currentTask)
-                and (self.outputLevel == "task" or bool(self.currentTask.outputs))
-            ):
-                self._appendTaskRows(
-                    rows,
-                    max(0, baseDepth + 1),
-                    self.currentTask,
-                    now,
-                    True,
-                    showTask=self.outputLevel == "task",
-                )
-        if self.outputLevel == "task" or self._hasVisibleTaskOutput(play):
-            for task in play.tasks:
-                self._appendTaskRows(
-                    rows,
-                    max(0, baseDepth + 1),
-                    task,
-                    now,
-                    False,
+                    childIsActive,
                     showTask=self.outputLevel == "task",
                 )
 
@@ -441,7 +504,11 @@ class AnsibleProgressParser:
 
         if self.currentTask is None or self.currentPlay is None:
             return
-        if self.currentTask.sawResult and not self.currentTask.sawExecutedResult:
+        if (
+            self.currentTask.sawResult
+            and not self.currentTask.sawExecutedResult
+            and not self.currentTask.outputs
+        ):
             self.currentTask = None
             self.idleStartTime = now
             self.syntheticTaskAliases = set()
@@ -485,6 +552,7 @@ class AnsibleProgressParser:
         duration: float,
         aborted: bool = False,
         failed: bool = False,
+        startTime: float = 0.0,
     ) -> None:
         """Record a completed prompt interaction.
 
@@ -494,13 +562,14 @@ class AnsibleProgressParser:
             duration: Time spent handling the prompt.
             aborted: Whether the interaction aborted the run.
             failed: Whether the interaction failed before completion.
+            startTime: Timestamp when the interaction began.
         """
 
         if self.currentPlay is None:
             return
         interaction = ProgressItem(
             name=f"{message} — {value}",
-            startTime=0.0,
+            startTime=startTime,
             aborted=aborted,
             duration=duration,
             failed=failed,
@@ -517,7 +586,7 @@ class AnsibleProgressParser:
         title: str,
         body: str,
         hideTaskRow: bool = False,
-    ) -> None:
+    ) -> bool:
         """Record a human-friendly output block for a task.
 
         Args:
@@ -525,14 +594,55 @@ class AnsibleProgressParser:
             hideTaskRow: Whether to suppress the owning task row in display rows.
             taskHeader: Ansible task header in optional ``role : task`` form.
             title: Short block title.
+
+        Returns:
+            True when an output target task was found.
         """
 
         targetTask = self._findTaskByHeader(taskHeader)
         if targetTask is None:
-            return
+            targetTask = self._createHiddenOutputTask(taskHeader)
+        if targetTask is None:
+            return False
         targetTask.outputs.append(
             PrettyOutput(title=title, body=body, hideTaskRow=hideTaskRow)
         )
+        return True
+
+    def _createHiddenOutputTask(self, taskHeader: str) -> ProgressItem | None:
+        """Create a hidden task to carry semantic output when structure is gone."""
+
+        if self.currentPlay is None:
+            return None
+        roleName = None
+        taskName = taskHeader
+        if " : " in taskHeader:
+            roleName, taskName = taskHeader.split(" : ", 1)
+            roleName, _hidden = self._displayNameAndHidden(roleName)
+        taskName, _hidden = self._displayNameAndHidden(taskName)
+        task = ProgressItem(
+            taskName,
+            self.currentPlay.startTime,
+            hidden=True,
+            sawResult=True,
+            sawExecutedResult=False,
+        )
+        if roleName is None:
+            self.currentPlay.tasks.append(task)
+            return task
+        targetRole = None
+        if self.currentRole is not None and self.currentRole.name == roleName:
+            targetRole = self.currentRole
+        else:
+            for role in reversed(self.currentPlay.roles):
+                if role.name == roleName:
+                    targetRole = role
+                    break
+        if targetRole is None:
+            targetRole = ProgressItem(roleName, self.currentPlay.startTime, hidden=True)
+            self.currentPlay.roles.append(targetRole)
+        targetRole.tasks.append(task)
+        return task
 
     @staticmethod
     def _row(
@@ -612,7 +722,7 @@ class AnsibleProgressParser:
     def _taskIsVisible(task: ProgressItem) -> bool:
         """Return whether a task should be shown in progress rows."""
 
-        return not task.sawResult or task.sawExecutedResult
+        return bool(task.outputs) or not task.sawResult or task.sawExecutedResult
 
     def _reopenLastCompletedTask(self, taskName: str, startTime: float) -> bool:
         """Reopen a just-completed task when another stream repeats its header."""

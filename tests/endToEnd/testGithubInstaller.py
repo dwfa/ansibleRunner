@@ -44,7 +44,7 @@ def testPackageSpecDefaultsToLatestReleaseWheel(monkeypatch: Any) -> None:
 
 
 def testPackageSpecUsesExplicitWheel(tmp_path: Path) -> None:
-    """Verify -w/--whl is shorthand for --package-spec."""
+    """Verify -w/--whl is shorthand for --packageSpec."""
 
     installer = _loadInstallerModule()
     wheelPath = tmp_path / "ansiblerunner-1.0.5-py3-none-any.whl"
@@ -139,7 +139,7 @@ def testPackageSpecCanInstallFromGit() -> None:
     """Verify the installer can still install from Git for development."""
 
     installer = _loadInstallerModule()
-    args = installer.parseArgs(["--install-from-git"])
+    args = installer.parseArgs(["--installFromGit"])
 
     assert installer.getPackageSpec(args) == (
         "ansibleRunner @ git+https://github.com/dwfa/ansibleRunner.git@main"
@@ -150,7 +150,7 @@ def testPackageSpecCanBeOverridden() -> None:
     """Verify forks, branches, and local package specs can be supplied."""
 
     installer = _loadInstallerModule()
-    args = installer.parseArgs(["--package-spec", "/tmp/ansibleRunner"])
+    args = installer.parseArgs(["--packageSpec", "/tmp/ansibleRunner"])
 
     assert installer.getPackageSpec(args) == "/tmp/ansibleRunner"
 
@@ -289,13 +289,13 @@ def testInstallPackageCanForceReinstall(monkeypatch: Any, tmp_path: Path) -> Non
             "/project/.venv/bin/python",
             "-m",
             "pip",
-            "install",
-            "--upgrade",
-            "--disable-pip-version-check",
-            "--force-reinstall",
-            "/downloads/ansiblerunner-1.0.7-py3-none-any.whl",
+                "install",
+                "--upgrade",
+                "--disable-pip-version-check",
+                "--force-reinstall",
+                "/downloads/ansiblerunner-1.0.7-py3-none-any.whl",
+            ]
         ]
-    ]
 
 
 def testInstallLogPathUsesProjectLogs(tmp_path: Path) -> None:
@@ -319,9 +319,10 @@ def testWriteLauncherRunsInstalledPackage(tmp_path: Path) -> None:
     installer.writeLauncher(launcherPath, tmp_path / ".venv")
 
     launcherText = launcherPath.read_text(encoding="utf-8")
-    assert "PROJECT_ROOT / '.venv'" in launcherText
+    assert "AR_PATH / '.venv'" in launcherText
     assert 'RUNNER = VENV_DIR / "bin" / "ansibleRunner"' in launcherText
-    assert '"--project-root",' in launcherText
+    assert '"--arPath",' in launcherText
+    assert "*sys.argv[1:]," in launcherText
     assert os.access(launcherPath, os.X_OK)
     assert launcherPath.stat().st_mode & stat.S_IXUSR
 

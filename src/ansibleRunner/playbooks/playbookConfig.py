@@ -144,7 +144,7 @@ def renderConfigSummary(config: PlaybookConfig | None) -> str:
     if playbookConfig.node:
         parts.append(f"-n {playbookConfig.node}")
     if playbookConfig.outputLevel != "role":
-        parts.append(f"--output-level {playbookConfig.outputLevel}")
+        parts.append(f"--outputLevel {playbookConfig.outputLevel}")
     if playbookConfig.extraArgs:
         parts.append(shlex.join(playbookConfig.extraArgs))
     return " ".join(parts) if parts else "(unset)"
@@ -171,6 +171,6 @@ def buildRunnerArgv(config: PlaybookConfig) -> list[str]:
         args.append("-t")
     if config.node:
         args.extend(["-n", config.node])
-    args.extend(["--output-level", config.outputLevel])
+    args.extend(["--outputLevel", config.outputLevel])
     args.extend(config.extraArgs)
     return args

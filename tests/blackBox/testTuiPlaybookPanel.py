@@ -38,10 +38,13 @@ async def testTuiPlaybookPanelShowsDiscoveredPlaybooks(tmp_path: Path) -> None:
         "##############################################################################\n"
         "# Configure DNS services\n"
         "##############################################################################\n"
-        "---\n",
+        "---\n"
+        "- name: Configure DNS services\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
         encoding="utf-8",
     )
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", Container)
@@ -56,14 +59,45 @@ async def testTuiPlaybookPanelShowsDiscoveredPlaybooks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def testTuiPlaybookPanelUsesExplicitPlaybookPath(tmp_path: Path) -> None:
+    """Verify pbPath drives discovery while logs and state stay under arPath."""
+
+    arPath = tmp_path / "ansiblePath"
+    pbPath = tmp_path / "playbookSource"
+    playbookDir = pbPath / "ops"
+    arPath.mkdir()
+    playbookDir.mkdir(parents=True)
+    (playbookDir / "deploy-pb.yaml").write_text(
+        _playbookText("# Deploy services\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(arPath, pbPath)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        table = pilot.app.query_one("#playbook-table", DataTable)
+
+        assert defaults.logDir == arPath.resolve() / "logs"
+        assert defaults.stateDir == arPath.resolve() / ".ansibleRunner" / "state"
+        assert table.row_count == 1
+        assert table.get_cell_at((0, 1)) == "📁 ops"
+
+
+@pytest.mark.asyncio
 async def testTuiPlaybookPanelShowsDirectoriesBeforePlaybooks(tmp_path: Path) -> None:
     """Verify playbook grouping directories are listed before playbooks."""
 
     playbookDir = tmp_path / "playbooks"
     dbDir = playbookDir / "db"
     dbDir.mkdir(parents=True)
-    (playbookDir / "site-pb.yaml").write_text("# Site\n---\n", encoding="utf-8")
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    (dbDir / "listServers-pb.yaml").write_text(
+        _playbookText("# List servers\n"),
+        encoding="utf-8",
+    )
+    (playbookDir / "site-pb.yaml").write_text(
+        _playbookText("# Site\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         table = pilot.app.query_one("#playbook-table", DataTable)
@@ -80,8 +114,11 @@ async def testTuiPlaybookPanelEnterOpensDirectory(tmp_path: Path) -> None:
     playbookDir = tmp_path / "playbooks"
     dbDir = playbookDir / "db"
     dbDir.mkdir(parents=True)
-    (dbDir / "listServers-pb.yaml").write_text("# List servers\n---\n", encoding="utf-8")
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    (dbDir / "listServers-pb.yaml").write_text(
+        _playbookText("# List servers\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -103,7 +140,7 @@ async def testTuiPlaybookPanelConfigureIgnoresDirectories(tmp_path: Path) -> Non
     playbookDir = tmp_path / "playbooks"
     dbDir = playbookDir / "db"
     dbDir.mkdir(parents=True)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     configured: list[str] = []
 
     async def fakeConfigure(entry) -> None:
@@ -126,9 +163,15 @@ async def testTuiPlaybookPanelSelectionFollowsCursor(tmp_path: Path) -> None:
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
-    (playbookDir / "first.yaml").write_text("# First playbook\n---\n", encoding="utf-8")
-    (playbookDir / "second.yaml").write_text("# Second playbook\n---\n", encoding="utf-8")
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    (playbookDir / "first.yaml").write_text(
+        _playbookText("# First playbook\n"),
+        encoding="utf-8",
+    )
+    (playbookDir / "second.yaml").write_text(
+        _playbookText("# Second playbook\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
@@ -151,9 +194,15 @@ async def testTuiPlaybookPanelActionsNameSelection(
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
-    (playbookDir / "first.yaml").write_text("# First playbook\n---\n", encoding="utf-8")
-    (playbookDir / "second.yaml").write_text("# Second playbook\n---\n", encoding="utf-8")
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    (playbookDir / "first.yaml").write_text(
+        _playbookText("# First playbook\n"),
+        encoding="utf-8",
+    )
+    (playbookDir / "second.yaml").write_text(
+        _playbookText("# Second playbook\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     launched: list[str] = []
 
     async def fakeLaunch(entry) -> None:
@@ -180,9 +229,15 @@ async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
 
     playbookDir = tmp_path / "playbooks"
     playbookDir.mkdir()
-    (playbookDir / "first.yaml").write_text("# First playbook\n---\n", encoding="utf-8")
-    (playbookDir / "second.yaml").write_text("# Second playbook\n---\n", encoding="utf-8")
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    (playbookDir / "first.yaml").write_text(
+        _playbookText("# First playbook\n"),
+        encoding="utf-8",
+    )
+    (playbookDir / "second.yaml").write_text(
+        _playbookText("# Second playbook\n"),
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     launched: list[str] = []
 
     async def fakeLaunch(entry) -> None:
@@ -205,3 +260,15 @@ async def testTuiPlaybookPanelEnterSelectsHighlightedRow(
         await menu.on_data_table_row_selected(FakeRowSelected())
 
         assert launched == ["second"]
+
+
+def _playbookText(header: str = "") -> str:
+    """Return a minimal valid Ansible playbook fixture."""
+
+    return (
+        header
+        + "---\n"
+        + "- name: Test play\n"
+        + "  hosts: all\n"
+        + "  tasks: []\n"
+    )

@@ -36,18 +36,22 @@ from ansibleRunner.tui.playbooks.screen import PlaybookMenuScreen
 from ansibleRunner.tui.run.screen import RunScreen
 
 
-def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
+def createPlaybook(arPath: Path, name: str = "site-pb") -> None:
     """Create a minimal playbook fixture.
 
     Args:
-        projectRoot: Temporary project root.
+        arPath: Temporary ansibleRunner path.
         name: Playbook stem without suffix.
     """
 
-    playbookDir = projectRoot / "playbooks"
+    playbookDir = arPath / "playbooks"
     playbookDir.mkdir(exist_ok=True)
     (playbookDir / f"{name}.yaml").write_text(
-        "# Configure DNS services\n---\n",
+        "# Configure DNS services\n"
+        "---\n"
+        "- name: Configure DNS services\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
         encoding="utf-8",
     )
 
@@ -57,7 +61,7 @@ async def testTuiLaunchPanelOpensFromPlaybookEnter(tmp_path: Path) -> None:
     """Verify Enter from the playbook list opens launch review."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
@@ -79,7 +83,7 @@ async def testTuiLaunchPanelOpensFromPlaybookEnter(tmp_path: Path) -> None:
         assert table.row_count == 1
         assert not table.show_header
         assert table.get_cell_at((0, 0)) == "Args"
-        assert table.get_cell_at((0, 1)) == "--output-level role"
+        assert table.get_cell_at((0, 1)) == "--outputLevel role"
 
 
 @pytest.mark.asyncio
@@ -87,7 +91,7 @@ async def testTuiLaunchPanelShowsSavedConfig(tmp_path: Path) -> None:
     """Verify launch review includes saved configuration details."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {
@@ -107,7 +111,7 @@ async def testTuiLaunchPanelShowsSavedConfig(tmp_path: Path) -> None:
         assert str(launchTitle.content) == "site dns"
         assert table.row_count == 1
         assert table.get_cell_at((0, 0)) == "Args"
-        assert table.get_cell_at((0, 1)) == "-d -n dns --output-level task"
+        assert table.get_cell_at((0, 1)) == "-d -n dns --outputLevel task"
 
 
 @pytest.mark.asyncio
@@ -119,7 +123,7 @@ async def testTuiLaunchPanelEnterRunsWhenTableHasFocus(
 
     _writeFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web", listTasks=True)},
@@ -143,7 +147,7 @@ async def testTuiLaunchPanelBackReturnsToPlaybookList(tmp_path: Path) -> None:
     """Verify launch review can return to the playbook list."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
@@ -155,11 +159,45 @@ async def testTuiLaunchPanelBackReturnsToPlaybookList(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def testTuiLaunchPanelBackPreservesPlaybookDirectory(tmp_path: Path) -> None:
+    """Verify launch back returns to the directory that opened the playbook."""
+
+    playbookDir = tmp_path / "playbooks"
+    dbDir = playbookDir / "db"
+    dbDir.mkdir(parents=True)
+    (dbDir / "listServers-pb.yaml").write_text(
+        "# List servers\n"
+        "---\n"
+        "- name: List servers\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
+        encoding="utf-8",
+    )
+    defaults = RuntimeDefaults.forArPath(tmp_path)
+
+    async with AnsibleRunnerTui(defaults).run_test() as pilot:
+        await pilot.press("enter")
+        table = pilot.app.query_one("#playbook-table", DataTable)
+        table.move_cursor(row=1)
+        await pilot.press("enter")
+        launchMenu = pilot.app.query_one("#launch-menu", LaunchScreen)
+
+        await launchMenu.action_back()
+
+        menu = pilot.app.query_one("#playbook-menu", PlaybookMenuScreen)
+        table = pilot.app.query_one("#playbook-table", DataTable)
+
+        assert menu.currentDir == dbDir.resolve()
+        assert table.get_cell_at((0, 1)) == ".."
+        assert table.get_cell_at((1, 1)) == "listServers"
+
+
+@pytest.mark.asyncio
 async def testTuiLaunchPanelConfigureOpensConfigure(tmp_path: Path) -> None:
     """Verify launch review can jump to saved configuration by key."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
@@ -176,7 +214,7 @@ async def testTuiLaunchPanelConfigureSaveReturnsToLaunch(tmp_path: Path) -> None
     """Verify saving configure from launch returns to refreshed launch review."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
@@ -192,7 +230,7 @@ async def testTuiLaunchPanelConfigureSaveReturnsToLaunch(tmp_path: Path) -> None
         table = pilot.app.query_one("#launch-table", DataTable)
 
         assert str(launchTitle.content) == "site dns"
-        assert table.get_cell_at((0, 1)) == "-n dns --output-level role"
+        assert table.get_cell_at((0, 1)) == "-n dns --outputLevel role"
 
 
 @pytest.mark.asyncio
@@ -200,7 +238,7 @@ async def testTuiLaunchPanelEditOnceReturnsTemporaryArgs(tmp_path: Path) -> None
     """Verify edit-once updates launch args without persisting config."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
 
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
@@ -235,10 +273,10 @@ async def testTuiLaunchPanelEditOnceReturnsTemporaryArgs(tmp_path: Path) -> None
 
         assert str(launchTitle.content) == "site"
         assert isinstance(launchArgs, Text)
-        assert launchArgs.plain == "-d --output-level role --tags bootstrap"
+        assert launchArgs.plain == "-d --outputLevel role --tags bootstrap"
         assert launchArgs.spans == [
             Span(0, 2, "bold cyan"),
-            Span(23, 39, "bold cyan"),
+            Span(22, 38, "bold cyan"),
         ]
         assert not (defaults.stateDir / "playbookConfig.json").exists()
 
@@ -250,7 +288,7 @@ async def testTuiLaunchPanelEditOnceStylesOnlyTemporaryGroups(
     """Verify saved args stay plain when one-run output level changes."""
 
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="preinstaller")},
@@ -271,8 +309,8 @@ async def testTuiLaunchPanelEditOnceStylesOnlyTemporaryGroups(
         launchArgs = launchTable.get_cell_at((0, 1))
 
         assert isinstance(launchArgs, Text)
-        assert launchArgs.plain == "-n preinstaller --output-level task"
-        assert launchArgs.spans == [Span(16, 35, "bold cyan")]
+        assert launchArgs.plain == "-n preinstaller --outputLevel task"
+        assert launchArgs.spans == [Span(16, 34, "bold cyan")]
 
 
 def _writeFakeAnsible(tmp_path: Path, monkeypatch: Any) -> None:

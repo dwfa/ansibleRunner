@@ -297,7 +297,7 @@ class LaunchScreen(Container):
         )
         self._appendArgGroup(
             text,
-            ["--output-level", self.config.outputLevel],
+            ["--outputLevel", self.config.outputLevel],
             self.config.outputLevel != self.savedConfig.outputLevel,
         )
         self._appendArgGroup(

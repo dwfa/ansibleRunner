@@ -130,6 +130,31 @@ def testParserShowsHiddenPrettyTaskOutputAtRoleLevel() -> None:
     ]
 
 
+def testParserKeepsStructuralTaskWhenItCarriesPrettyOutput() -> None:
+    """Verify semantic output survives hidden structural task finalization."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [List servers @ar:hide] ****************", now=1.0)
+    parser.startSyntheticTask("show niceDisplay sample", now=2.0)
+    parser.suppressTask("show niceDisplay sample", now=3.0)
+    parser.recordTaskOutput(
+        "show niceDisplay sample",
+        "Server summary",
+        "NAME\n----\ndb1",
+        hideTaskRow=True,
+    )
+    parser.finalizePlay(now=4.0)
+
+    rows = parser.rows(now=5.0)
+
+    assert [(row.icon, row.name, row.output is not None) for row in rows] == [
+        ("", "", True),
+    ]
+    assert rows[0].output is not None
+    assert rows[0].output.title == "Server summary"
+
+
 def testParserHidesPrettyOutputTaskRowAtTaskLevel() -> None:
     """Verify task output level can still hide pretty output task rows."""
 
@@ -261,6 +286,39 @@ def testParserMergesRealTaskHeaderIntoSyntheticTask() -> None:
         ("🔧", "Writing image to device", "succeeded"),
     ]
     assert rows[3].duration == 60.0
+
+
+def testParserRendersPlayTasksBeforeLaterActiveRole() -> None:
+    """Verify play-level tasks retain chronological order before active roles."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create RPi Image] ****************", now=1.0)
+    parser.processLine("TASK [Load remote connection vars] *****", now=2.0)
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.processLine(
+        "TASK [Gather facts now that connection vars are loaded] *****",
+        now=4.0,
+    )
+    parser.processLine("ok: [installer]", now=5.0)
+    parser.processLine("TASK [createRPiImage : confirm write operation] *****", now=6.0)
+    parser.processLine("ok: [installer]", now=7.0)
+    parser.startSyntheticTask(
+        "createRPiImage : Writing image to device",
+        now=8.0,
+        aliases={"createRPiImage : write image to device"},
+    )
+
+    rows = parser.rows(now=18.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "running"),
+        ("🔧", "Load remote connection vars", "succeeded"),
+        ("🔧", "Gather facts now that connection vars are loaded", "succeeded"),
+        ("⚙", "createRPiImage", "running"),
+        ("🔧", "confirm write operation", "succeeded"),
+        ("🔧", "Writing image to device", "running"),
+    ]
 
 
 def testParserStartsSyntheticTaskFromCurrentRole() -> None:
@@ -533,6 +591,55 @@ def testParserShowsPromptInteractionsUnderActiveRole() -> None:
         (2, "💬", "wait of input to continue — continued", "succeeded"),
     ]
     assert rows[2].duration == 0.5
+
+
+def testParserRendersRoleInteractionsByStartTime() -> None:
+    """Verify role prompt interactions stay where the prompt occurred."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Create RPi Image] ****************", now=1.0)
+    parser.processLine(
+        "TASK [getInstallDevice : Get set of initial external devices] *****",
+        now=2.0,
+    )
+    parser.processLine("ok: [installer]", now=3.0)
+    parser.processLine(
+        "TASK [getInstallDevice : Ask and wait for new device to be attached] *****",
+        now=4.0,
+    )
+    parser.suppressActiveTask(now=5.0)
+    parser.recordInteraction(
+        "Attach external device",
+        "continued",
+        14.0,
+        startTime=4.0,
+    )
+    parser.processLine(
+        "TASK [getInstallDevice : Get current external devices] *****",
+        now=20.0,
+    )
+    parser.processLine("ok: [installer]", now=21.0)
+    parser.processLine(
+        "TASK [getInstallDevice : Compute newly-attached devices] *****",
+        now=22.0,
+    )
+    parser.processLine("ok: [installer]", now=23.0)
+    parser.processLine("TASK [getInstallDevice : Set installDevice fact] *****", now=24.0)
+    parser.processLine("ok: [installer]", now=25.0)
+    parser.finalizePlay(now=26.0)
+
+    rows = parser.rows(now=27.0)
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "succeeded"),
+        ("⚙", "getInstallDevice", "succeeded"),
+        ("🔧", "Get set of initial external devices", "succeeded"),
+        ("💬", "Attach external device — continued", "succeeded"),
+        ("🔧", "Get current external devices", "succeeded"),
+        ("🔧", "Compute newly-attached devices", "succeeded"),
+        ("🔧", "Set installDevice fact", "succeeded"),
+    ]
 
 
 def testParserHidesRoleInteractionsWhenPrettyOutputIsVisible() -> None:

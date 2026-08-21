@@ -35,7 +35,7 @@ def testCliMainRejectsUnknownFlag(
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--definitely-not-a-real-flag"])
+        cli.main(["--definitelyNotRealFlag"])
 
     assert exc.value.code == 2
     capsys.readouterr()
@@ -55,5 +55,6 @@ def testCliHelpDoesNotCrash(
 
     assert exc.value.code == 0
     output = capsys.readouterr().out
-    assert "--list-defaults" in output
-    assert "--project-root" in output
+    assert "--listDefaults" in output
+    assert "--arPath" in output
+    assert "--pbPath" in output

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 from types import SimpleNamespace
@@ -30,15 +31,18 @@ import pytest
 from rich.console import Console
 from rich.text import Text
 from textual.containers import Container, VerticalScroll
+from textual.selection import Selection
 from textual.widgets import Input, Static
 
 import ansibleRunner.tui.run.screen as runScreenModule
 from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig
 from ansibleRunner.playbooks.playbookConfig import savePlaybookConfigs
+from ansibleRunner.progressParser import ProgressRow
+from ansibleRunner.runner import RunnerResult
 from ansibleRunner.tui.app import AnsibleRunnerTui
 from ansibleRunner.tui.launch.screen import LaunchScreen
-from ansibleRunner.tui.run.screen import SPINNER_FRAMES, RunScreen
+from ansibleRunner.tui.run.screen import SPINNER_FRAMES, RunProgress, RunScreen
 
 
 def _renderRich(renderable: object) -> str:
@@ -57,30 +61,34 @@ def _renderRich(renderable: object) -> str:
     return output.getvalue()
 
 
-def createPlaybook(projectRoot: Path, name: str = "site-pb") -> None:
+def createPlaybook(arPath: Path, name: str = "site-pb") -> None:
     """Create a minimal playbook fixture.
 
     Args:
-        projectRoot: Temporary project root.
+        arPath: Temporary ansibleRunner path.
         name: Playbook stem without suffix.
     """
 
-    playbookDir = projectRoot / "playbooks"
+    playbookDir = arPath / "playbooks"
     playbookDir.mkdir(exist_ok=True)
     (playbookDir / f"{name}.yaml").write_text(
-        "# Configure DNS services\n---\n",
+        "# Configure DNS services\n"
+        "---\n"
+        "- name: Configure DNS services\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
         encoding="utf-8",
     )
 
 
-def createRunScreen(projectRoot: Path) -> RunScreen:
+def createRunScreen(arPath: Path) -> RunScreen:
     """Create a run screen fixture for direct event processing tests."""
 
     return RunScreen(
-        RuntimeDefaults.forProject(projectRoot),
+        RuntimeDefaults.forArPath(arPath),
         entry=SimpleNamespace(
             displayName="site",
-            path=projectRoot / "playbooks" / "site-pb.yaml",
+            path=arPath / "playbooks" / "site-pb.yaml",
             title="site-pb.yaml",
         ),
         config=PlaybookConfig(node="web", outputLevel="task"),
@@ -126,6 +134,18 @@ def testPrettyOutputClipboardTextStripsArMarkup(tmp_path: Path) -> None:
     runScreen.progressRows = runScreen.progressParser.rows(monotonic())
 
     assert runScreen._prettyOutputClipboardText() == "Done\nstatus = ok"
+
+
+def testRunProgressSelectionUsesPlainTextBacking() -> None:
+    """Verify rich progress output still exposes selectable text."""
+
+    progress = RunProgress()
+    progress.setSelectionText("Sample table output\nNAME  STATUS\ndb1   ok")
+
+    assert progress.get_selection(Selection(None, None)) == (
+        "Sample table output\nNAME  STATUS\ndb1   ok",
+        "\n",
+    )
 
 
 async def waitForRunComplete(pilot: Any, cycles: int = 100) -> None:
@@ -205,6 +225,46 @@ def testTuiRunPanelProcessesCallbackTaskLifecycle(tmp_path: Path) -> None:
     ]
 
 
+def testTuiRunPanelIgnoresUnrelatedCallbackResultDuringSyntheticTask(
+    tmp_path: Path,
+) -> None:
+    """Verify unrelated callback results do not complete active synthetic work."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    runScreen.progressParser.processLine("PLAY [Create RPi Image] ********", now=1.0)
+    runScreen.progressParser.processLine(
+        "TASK [createRPiImage : confirm write operation] ********",
+        now=2.0,
+    )
+    runScreen.progressParser.processLine("ok: [installer]", now=3.0)
+    runScreen.progressParser.startSyntheticTask(
+        "createRPiImage : Writing image to device",
+        now=4.0,
+        aliases={"createRPiImage : write image to device"},
+    )
+
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "task": {
+                    "name": "Load remote connection vars",
+                    "role": "",
+                },
+            },
+        }
+    )
+    rows = runScreen.progressParser.rows(now=monotonic())
+
+    assert [(row.icon, row.name, row.status) for row in rows] == [
+        ("🎭", "Create RPi Image", "running"),
+        ("⚙", "createRPiImage", "running"),
+        ("🔧", "confirm write operation", "succeeded"),
+        ("🔧", "Writing image to device", "running"),
+    ]
+
+
 def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     """Verify niceDisplay callback results render as framed preformatted output."""
 
@@ -229,6 +289,19 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     )
     runScreen._processEventRecord(
         {
+            "event": "runner_ok",
+            "result": {
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "getInstallDevice : Ask and wait for new device to be attached",
+                    "path": "/tmp/tasks/macOS/getInstallDevice.yaml:40",
+                    "role": "getInstallDevice",
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
             "event": "include",
             "include": {
                 "filename": "/tmp/tasks/misc/niceDisplay.yaml",
@@ -240,6 +313,19 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
             },
         }
     )
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+        runScreen.activePromptTitle = title
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
     runScreen._processEventRecord(
         {
             "event": "task_start",
@@ -284,6 +370,30 @@ def testTuiRunPanelRendersNiceDisplayCallbackPayload(tmp_path: Path) -> None:
     )
 
 
+def testTuiRunPanelPrettyOutputUsesFullProgressWidth(tmp_path: Path) -> None:
+    """Verify niceDisplay panels are not constrained by status columns."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    wideLine = "x" * 90
+    runScreen.progressParser.processLine("PLAY [site] ********", now=1.0)
+    runScreen.progressParser.processLine(
+        "TASK [niceDisplay: Sample table output] ********",
+        now=2.0,
+    )
+    runScreen.progressParser.recordTaskOutput(
+        "niceDisplay: Sample table output",
+        "Sample table output",
+        wideLine,
+        hideTaskRow=True,
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(monotonic())
+
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert wideLine in renderedProgress
+
+
 def testTuiRunPanelRendersTopLevelNiceDisplayInHiddenPlay(tmp_path: Path) -> None:
     """Verify top-level niceDisplay output renders when the play row is hidden."""
 
@@ -322,6 +432,19 @@ def testTuiRunPanelRendersTopLevelNiceDisplayInHiddenPlay(tmp_path: Path) -> Non
             },
         }
     )
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+        runScreen.activePromptTitle = title
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
     runScreen._processEventRecord(
         {
             "event": "task_start",
@@ -356,6 +479,151 @@ def testTuiRunPanelRendersTopLevelNiceDisplayInHiddenPlay(tmp_path: Path) -> Non
     assert "NAME        STATUS" in renderedProgress
     assert "test-one    ok" in renderedProgress
     assert "niceDisplay:" not in renderedProgress
+
+
+def testTuiRunPanelDrainsFinalNiceDisplayEventBeforeFinish(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Verify final hidden-play niceDisplay output survives run completion."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    eventLogPath = tmp_path / "logs" / "site.events.jsonl"
+    eventLogPath.parent.mkdir(parents=True, exist_ok=True)
+    eventRecords = [
+        {
+            "event": "play_start",
+            "play": {"name": "Play 2 Test a few more tasks @ar:hide"},
+        },
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "show niceDisplay sample",
+                "path": "/tmp/playbooks/test-pb.yaml:67",
+                "role": None,
+            },
+        },
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "show niceDisplay sample",
+                    "path": "/tmp/playbooks/test-pb.yaml:67",
+                    "role": None,
+                },
+            },
+        },
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.debug",
+                "name": "niceDisplay: Sample table output",
+                "path": "/tmp/tasks/misc/niceDisplay.yaml:15",
+                "role": None,
+            },
+        },
+        {
+            "event": "runner_ok",
+            "result": {
+                "changed": False,
+                "msg": "NAME        STATUS\n----------  -------\ntest-one    ok",
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "niceDisplay: Sample table output",
+                    "path": "/tmp/tasks/misc/niceDisplay.yaml:15",
+                    "role": None,
+                },
+            },
+        },
+    ]
+    eventLogPath.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in eventRecords),
+        encoding="utf-8",
+    )
+
+    class FakeWidget:
+        """Minimal widget double for direct finish rendering."""
+
+        def __init__(self) -> None:
+            """Initialize captured widget state."""
+
+            self.content: object = ""
+            self.display = True
+
+        def update(self, content: object) -> None:
+            """Capture rendered widget content."""
+
+            self.content = content
+
+        def setSelectionText(self, _text: str) -> None:
+            """Accept selectable progress text."""
+
+    widgets = {
+        "#run-failure": FakeWidget(),
+        "#run-help": FakeWidget(),
+        "#run-progress": FakeWidget(),
+        "#run-status": FakeWidget(),
+    }
+    monkeypatch.setattr(
+        runScreen,
+        "query_one",
+        lambda selector, *_args, **_kwargs: widgets[selector],
+    )
+    monkeypatch.setattr(runScreen, "_refreshPromptPanel", lambda: None)
+
+    runScreen._finishRun(
+        RunnerResult(
+            command=("ansible-playbook",),
+            returnCode=0,
+            stdout="",
+            stderr="",
+            eventLogPath=eventLogPath,
+        )
+    )
+    renderedProgress = _renderRich(widgets["#run-progress"].content)
+
+    assert "Play 2 Test a few more tasks" not in renderedProgress
+    assert "Sample table output" in renderedProgress
+    assert "NAME        STATUS" in renderedProgress
+    assert "test-one    ok" in renderedProgress
+    assert "niceDisplay:" not in renderedProgress
+
+
+def testTuiRunPanelKeepsPartialEventLogLineForLaterDrain(
+    tmp_path: Path,
+) -> None:
+    """Verify incomplete callback JSON is not consumed permanently."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+    eventLogPath = tmp_path / "logs" / "site.events.jsonl"
+    eventLogPath.parent.mkdir(parents=True, exist_ok=True)
+    firstRecord = {"event": "play_start", "play": {"name": "site"}}
+    secondRecord = {
+        "event": "task_start",
+        "task": {
+            "action": "ansible.builtin.include_tasks",
+            "name": "niceDisplay: Summary",
+            "path": "/tmp/tasks/misc/niceDisplay.yaml:15",
+        },
+    }
+    firstLine = json.dumps(firstRecord) + "\n"
+    secondLine = json.dumps(secondRecord)
+    eventLogPath.write_text(firstLine + secondLine[:20], encoding="utf-8")
+
+    runScreen.eventLogPath = eventLogPath
+    runScreen._processEventLogUpdates()
+
+    assert runScreen.eventLogOffset == len(firstLine)
+    eventLogPath.write_text(firstLine + secondLine + "\n", encoding="utf-8")
+    runScreen._processEventLogUpdates()
+
+    assert runScreen.eventLogOffset == len(firstLine) + len(secondLine) + 1
+    assert runScreen.pendingPrettyOutputTitle == "Summary"
 
 
 def testTuiRunPanelKeepsNiceDisplayInTaskOrder(tmp_path: Path) -> None:
@@ -508,6 +776,153 @@ def testTuiRunPanelHidesNiceWaitCallbackTaskRow(tmp_path: Path) -> None:
         ("Sample nice wait", "continue", "Sample nice wait"),
     ]
     assert "niceWait: Sample nice wait" not in renderedProgress
+
+
+def testTuiRunPanelHidesRoleScopedNiceWaitCallbackTaskRow(tmp_path: Path) -> None:
+    """Verify role-scoped niceWait implementation tasks do not render as rows."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Build Raspberry Pi image"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "getInstallDevice : Ask and wait for new device to be attached",
+                "path": "/tmp/tasks/macOS/getInstallDevice.yaml:40",
+                "role": "getInstallDevice",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceWait.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "getInstallDevice : Ask and wait for new device to be attached",
+                    "path": "/tmp/tasks/macOS/getInstallDevice.yaml:40",
+                    "role": "getInstallDevice",
+                },
+            },
+        }
+    )
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+        runScreen.activePromptTitle = title
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.pause",
+                "name": "getInstallDevice : niceWait: Attach external device",
+                "path": "/tmp/tasks/misc/niceWait.yaml:33",
+                "role": "getInstallDevice",
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert startedPrompts == [
+        ("Attach external device", "continue", "Attach external device"),
+    ]
+    assert runScreen.activePromptTitle == "Attach external device"
+    assert "🔧 Ask and wait for new device to be attached" not in renderedProgress
+    assert "🔧 niceWait:" not in renderedProgress
+
+
+def testTuiRunPanelConsumesNativeNiceWaitTaskAfterCallbackPrompt(
+    tmp_path: Path,
+) -> None:
+    """Verify native stdout does not re-add a callback-handled niceWait task."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Build Raspberry Pi image"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.include_tasks",
+                "name": "getInstallDevice : Ask and wait for new device to be attached",
+                "path": "/tmp/tasks/macOS/getInstallDevice.yaml:40",
+                "role": "getInstallDevice",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceWait.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "getInstallDevice : Ask and wait for new device to be attached",
+                    "path": "/tmp/tasks/macOS/getInstallDevice.yaml:40",
+                    "role": "getInstallDevice",
+                },
+            },
+        }
+    )
+    startedPrompts: list[tuple[str, str, str | None]] = []
+
+    def fakeStartPrompt(
+        message: str,
+        _now: float,
+        fromInclude: bool,
+        mode: str,
+        title: str | None = None,
+    ) -> None:
+        startedPrompts.append((message, mode, title))
+
+    runScreen._startPrompt = fakeStartPrompt  # type: ignore[method-assign]
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.pause",
+                "name": "getInstallDevice : niceWait: Attach external device",
+                "path": "/tmp/tasks/misc/niceWait.yaml:33",
+                "role": "getInstallDevice",
+            },
+        }
+    )
+
+    runScreen._processProgressLine(
+        "TASK [getInstallDevice : niceWait: Attach external device] ********"
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert startedPrompts == [
+        ("Attach external device", "continue", "Attach external device"),
+    ]
+    assert "🔧 niceWait:" not in renderedProgress
 
 
 def testTuiRunPanelSuppressesNiceInputFollowupTasks(tmp_path: Path) -> None:
@@ -793,7 +1208,7 @@ async def testTuiRunPanelRunsSelectedPlaybook(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -856,6 +1271,64 @@ async def testTuiRunPanelRunsSelectedPlaybook(
         assert pilot.app.query_one("#launch-menu", LaunchScreen)
 
 
+def testTuiRunPanelDrawsVerticalGuideBetweenRoleSiblings(tmp_path: Path) -> None:
+    """Verify task-level rows keep the parent guide line between roles."""
+
+    runScreen = createRunScreen(tmp_path)
+    runScreen.progressRows = [
+        ProgressRow(
+            depth=0,
+            duration=3.5,
+            icon="🎭",
+            name="Prepare local resources",
+            status="succeeded",
+        ),
+        ProgressRow(
+            depth=1,
+            duration=1.0,
+            icon="⚙",
+            name="prepareRemoteCredentials",
+            status="succeeded",
+        ),
+        ProgressRow(
+            depth=2,
+            duration=0.0,
+            icon="🔧",
+            name="Load raw user data",
+            status="succeeded",
+        ),
+        ProgressRow(
+            depth=2,
+            duration=0.3,
+            icon="🔧",
+            name="Write public SSH key to disk",
+            status="succeeded",
+        ),
+        ProgressRow(
+            depth=1,
+            duration=2.7,
+            icon="⚙",
+            name="updateRPiImage",
+            status="running",
+        ),
+        ProgressRow(
+            depth=2,
+            duration=0.2,
+            icon="🔧",
+            name="Ensure image directory exists",
+            status="succeeded",
+        ),
+    ]
+
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert "   ├─ ⚙ prepareRemoteCredentials" in renderedProgress
+    assert "   │  ├─ 🔧 Load raw user data" in renderedProgress
+    assert "   │  └─ 🔧 Write public SSH key to disk" in renderedProgress
+    assert "   └─ ⚙ updateRPiImage" in renderedProgress
+    assert "      └─ 🔧 Ensure image directory exists" in renderedProgress
+
+
 @pytest.mark.asyncio
 async def testTuiRunPanelAutoScrollsProgressToEnd(
     tmp_path: Path,
@@ -865,7 +1338,7 @@ async def testTuiRunPanelAutoScrollsProgressToEnd(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -904,7 +1377,7 @@ async def testTuiRunPanelPausesAutoScrollWhenUserLeavesBottom(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -942,7 +1415,7 @@ async def testTuiRunPanelMouseScrollHitTestUsesTextualPoint(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -972,7 +1445,7 @@ async def testTuiRunPanelResumesAutoScrollWhenUserReturnsToBottom(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1010,7 +1483,7 @@ async def testTuiRunPanelDoesNotAutoScrollAfterRunCompletes(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1046,7 +1519,7 @@ async def testTuiRunPanelSpaceReturnsAfterCompletedRun(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1075,7 +1548,7 @@ async def testTuiRunPanelEscapeReturnsAfterCompletedRun(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1104,7 +1577,7 @@ async def testTuiRunPanelShowsFailureDetails(
 
     _writeFailingFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
@@ -1167,7 +1640,7 @@ async def testTuiRunPanelRunsWhenNodeIsUnset(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(outputLevel="task")},
@@ -1204,7 +1677,7 @@ async def testTuiRunPanelCanCancelActiveRun(
 
     _writeSlowFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1244,7 +1717,7 @@ async def testTuiRunPanelEnterSendsInputToActiveRun(
 
     _writeInputFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1278,7 +1751,7 @@ async def testTuiRunPanelShowsPromptCardAndRecordsInteraction(
 
     _writeInputFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1325,7 +1798,7 @@ async def testTuiRunPanelSubmitsTypedPromptInput(
 
     _writePromptValueFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1390,7 +1863,7 @@ async def testTuiRunPanelMarksUnresolvedPromptAsFailed(
 
     _writeUndefinedPromptFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1422,7 +1895,7 @@ async def testTuiRunPanelSpaceContinuesEmptyPrompt(
 
     _writeInputFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1463,7 +1936,7 @@ async def testTuiRunPanelDetectsNiceWaitPromptInclude(
 
     _writeCustomWaitIncludeFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1500,6 +1973,7 @@ async def testTuiRunPanelDetectsNiceWaitPromptInclude(
         assert runScreen.activePromptMessage is None
         assert "💬 Attach external device — continued" in renderedProgress
         assert "🔧 wait for user input" not in renderedProgress
+        assert "🔧 niceWait:" not in renderedProgress
 
 
 @pytest.mark.asyncio
@@ -1511,7 +1985,7 @@ async def testTuiRunPanelUsesNiceWaitTitle(
 
     _writeNiceWaitFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1541,6 +2015,8 @@ async def testTuiRunPanelUsesNiceWaitTitle(
             pilot.app.query_one("#run-progress", Static).content
         )
         assert "Attach external device — continued" in renderedProgress
+        assert "🔧 show wait prompt" not in renderedProgress
+        assert "🔧 niceWait:" not in renderedProgress
 
 
 @pytest.mark.asyncio
@@ -1552,7 +2028,7 @@ async def testTuiRunPanelUsesNiceInputTitle(
 
     _writeNiceInputFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1583,6 +2059,8 @@ async def testTuiRunPanelUsesNiceInputTitle(
             pilot.app.query_one("#run-progress", Static).content
         )
         assert "Enter DHCP address — continued" in renderedProgress
+        assert "🔧 show DHCP prompt" not in renderedProgress
+        assert "🔧 niceInput:" not in renderedProgress
 
 
 @pytest.mark.asyncio
@@ -1594,7 +2072,7 @@ async def testTuiRunPanelStartsPromptFromCallbackEvent(
 
     _writeEventPromptFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1637,7 +2115,7 @@ async def testTuiRunPanelStartsProgressTaskFromCallbackEvent(
 
     _writeEventTaskFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
@@ -1671,7 +2149,7 @@ async def testTuiRunPanelRendersBracketedPromptTextLiterally(
 
     _writeBracketedPromptFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1709,7 +2187,7 @@ async def testTuiRunPanelRendersMultilinePromptText(
 
     _writeMultilineWaitFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1754,7 +2232,7 @@ async def testTuiRunPanelShowsSyntheticWriteTaskAfterDestructivePrompt(
 
     _writeSlowImageWritePromptFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
@@ -1763,7 +2241,7 @@ async def testTuiRunPanelShowsSyntheticWriteTaskAfterDestructivePrompt(
     async with AnsibleRunnerTui(defaults).run_test() as pilot:
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause(0.3)
+        await waitForActivePrompt(pilot)
 
         runScreen = pilot.app.query_one("#run-menu", RunScreen)
         assert runScreen.activePromptMessage is not None
@@ -1783,6 +2261,9 @@ async def testTuiRunPanelShowsSyntheticWriteTaskAfterDestructivePrompt(
 
         assert "Writing image to device" in renderedProgress
         assert "write image to device" not in renderedProgress
+        assert "🔧 confirm write operation" not in renderedProgress
+        assert "🔧 niceWait:" not in renderedProgress
+        assert "💬 confirm write operation — continued" in renderedProgress
         assert runScreen.result is not None
         assert runScreen.result.returnCode == 0
 
@@ -1796,7 +2277,7 @@ async def testTuiRunPanelShowsSyntheticCopyTaskDuringQuietTransfer(
 
     _writeSlowRemoteCopyFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web", outputLevel="task")},
@@ -1834,7 +2315,7 @@ async def testTuiRunPanelClearsPromptCardWhenRunFinishes(
 
     _writeCompletingPromptFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1868,7 +2349,7 @@ async def testTuiRunPanelEscapeCancelsActiveRunAndStaysInApp(
 
     _writeSlowFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1900,7 +2381,7 @@ async def testTuiRunPanelQuitDoesNotCancelActiveRun(
 
     _writeSlowFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1935,7 +2416,7 @@ async def testTuiRunPanelCtrlCExitsProcessCleanly(
 
     _writeSlowFakeAnsible(tmp_path, monkeypatch)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},
@@ -1974,7 +2455,7 @@ async def testTuiRunPanelCtrlZSendsSuspendToApp(
 
     _writeFakeAnsible(tmp_path, monkeypatch, exitCode=0)
     createPlaybook(tmp_path)
-    defaults = RuntimeDefaults.forProject(tmp_path)
+    defaults = RuntimeDefaults.forArPath(tmp_path)
     savePlaybookConfigs(
         defaults.stateDir / "playbookConfig.json",
         {"site-pb": PlaybookConfig(node="web")},

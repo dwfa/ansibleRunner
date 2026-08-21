@@ -53,7 +53,7 @@ def testMainRunsTestsBeforeWheelBuild(monkeypatch: Any, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(build, "pruneBuildLogs", lambda context: calls.append("logs"))
 
-    result = build.main(["--out-dir", str(tmp_path / "dist"), "--no-spinner"])
+    result = build.main(["--outDir", str(tmp_path / "dist"), "--noSpinner"])
 
     assert result == 0
     assert calls == ["root", "python", "tests", "wheel", "logs"]
@@ -86,7 +86,7 @@ def testMainStopsWhenTestsFail(monkeypatch: Any, tmp_path: Path) -> None:
     )
 
     with pytest.raises(SystemExit) as exc:
-        build.main(["--out-dir", str(tmp_path / "dist"), "--no-spinner"])
+        build.main(["--outDir", str(tmp_path / "dist"), "--noSpinner"])
 
     assert exc.value.code == 5
     assert calls == ["root", "python", "tests"]

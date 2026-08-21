@@ -27,7 +27,7 @@ def testMainRunsInstalledToolkitFromCurrentDirectory(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """Verify main uses cwd as project root and runs installed ansibleRunner."""
+    """Verify main uses cwd as arPath and runs installed ansibleRunner."""
 
     shim = _loadShimModule()
     calls: list[list[str]] = []
@@ -41,7 +41,7 @@ def testMainRunsInstalledToolkitFromCurrentDirectory(
         or subprocess.CompletedProcess(command, 0),
     )
 
-    result = shim.main(["--list-defaults"])
+    result = shim.main(["--listDefaults"])
 
     assert result == 0
     assert calls == [
@@ -49,9 +49,9 @@ def testMainRunsInstalledToolkitFromCurrentDirectory(
             str(tmp_path / ".venv" / "bin" / "python"),
             "-m",
             "ansibleRunner",
-            "--project-root",
+            "--arPath",
             str(tmp_path),
-            "--list-defaults",
+            "--listDefaults",
         ]
     ]
 

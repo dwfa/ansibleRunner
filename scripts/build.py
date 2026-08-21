@@ -617,7 +617,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         description="Test and build the ansibleRunner wheel distribution.",
     )
     parser.add_argument(
-        "--out-dir",
+        "--outDir",
         dest="outDir",
         default="dist",
         help="Directory where the wheel will be written. Defaults to dist.",
@@ -628,13 +628,13 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Python executable used to run the build module.",
     )
     parser.add_argument(
-        "--venv-dir",
+        "--venvDir",
         dest="venvDir",
         default=".venv",
         help="Virtual environment directory used for build bootstrapping.",
     )
     parser.add_argument(
-        "--log-file",
+        "--logFile",
         dest="logFile",
         default=None,
         help="Full-detail build log file. Defaults to logs/build-<dts>.log.",
@@ -646,7 +646,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Show build substeps on screen.",
     )
     parser.add_argument(
-        "--no-spinner",
+        "--noSpinner",
         dest="noSpinner",
         action="store_true",
         help="Disable animated step spinner.",

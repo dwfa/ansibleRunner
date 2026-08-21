@@ -118,7 +118,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run unit tests. This is the default when no scope is selected.",
     )
     parser.add_argument(
-        "--venv-dir",
+        "--venvDir",
         dest="venvDir",
         default=".venv",
         help="Virtual environment directory used for test bootstrapping.",

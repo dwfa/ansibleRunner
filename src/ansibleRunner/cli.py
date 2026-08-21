@@ -2,11 +2,11 @@
 # Command-line entry point for ansibleRunner.
 #
 # USAGE:
-#   ansibleRunner --project-root /path/to/project
+#   ansibleRunner --arPath /path/to/ar --pbPath /path/to/playbooks
 #
 # WORKFLOW:
 #   1. Capture command-line arguments.
-#   2. Use the current working directory as the default project root.
+#   2. Use the current working directory as the default ansibleRunner path.
 #   3. Delegate to the public application entry point.
 #
 # Copyright 2026 Douglas WF Acheson (dwfa@dwfa.ca)
@@ -37,5 +37,5 @@ def main(argv: list[str] | None = None) -> int:
     """
 
     args = list(sys.argv[1:] if argv is None else argv)
-    projectRoot = Path.cwd()
-    return runApp(projectRoot, args)
+    arPath = Path.cwd()
+    return runApp(arPath, args)

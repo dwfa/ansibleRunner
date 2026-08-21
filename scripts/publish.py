@@ -5,7 +5,7 @@
 # USAGE:
 #   ./scripts/publish.py
 #   python3 scripts/publish.py
-#   python3 scripts/publish.py --dry-run
+#   python3 scripts/publish.py --dryRun
 #
 # OUTPUT VARIABLES:
 #   - Git tag: v<pyproject version>
@@ -23,7 +23,7 @@
 #   2. Read the package version from pyproject.toml.
 #   3. Require a clean git worktree.
 #   4. Require local HEAD to be synced to the branch upstream, or explicitly
-#      push the branch with --push-branch.
+#      push the branch with --pushBranch.
 #   5. Verify the release tag does not already exist locally or remotely.
 #   6. Run scripts/build.py to test and build the release wheel.
 #   7. Create and push the annotated release tag.
@@ -31,7 +31,7 @@
 #
 # NOTES:
 #   - This script publishes the version already declared in pyproject.toml.
-#   - Use --dry-run to inspect the exact release steps without changing git or
+#   - Use --dryRun to inspect the exact release steps without changing git or
 #     GitHub.
 #   - GitHub publishing requires the gh CLI to be installed and authenticated.
 #
@@ -413,26 +413,26 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "-dr",
-        "--dry-run",
+        "--dryRun",
         action="store_true",
         help="Print release steps without changing git or GitHub.",
     )
     parser.add_argument(
         "-sb",
-        "--skip-build",
+        "--skipBuild",
         action="store_true",
         help="Use an existing dist wheel instead of running scripts/build.py.",
     )
     parser.add_argument(
         "-pb",
-        "--push-branch",
+        "--pushBranch",
         action="store_true",
         help="Push the current branch to origin before tagging the release.",
     )
     tagMode = parser.add_mutually_exclusive_group()
     tagMode.add_argument(
         "-ut",
-        "--reuse-tag",
+        "--reuseTag",
         action="store_true",
         help=(
             "Reuse an existing local/remote tag that already points at HEAD, "
@@ -441,7 +441,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     )
     tagMode.add_argument(
         "-rt",
-        "--replace-tag",
+        "--replaceTag",
         action="store_true",
         help=(
             "Move an existing local/remote tag to HEAD, force-push it, and "
@@ -675,7 +675,7 @@ def requireHeadSyncedToUpstream(
         raise SystemExit(
             f"Cannot publish because {branchName} has {aheadCount} local "
             f"commit(s) not on {upstreamBranch}. Run git push origin "
-            f"{branchName}, or rerun publish with --push-branch."
+            f"{branchName}, or rerun publish with --pushBranch."
         )
     if behindCount and not aheadCount:
         raise SystemExit(
@@ -789,19 +789,19 @@ def requireExistingTagAtHead(projectRoot: Path, tagName: str) -> None:
     if localTag != head:
         raise SystemExit(
             f"Cannot reuse {tagName} because the local tag does not point at HEAD. "
-            "Use --replace-tag to move it."
+            "Use --replaceTag to move it."
         )
 
     remoteTag = remoteTagObject(projectRoot, tagName)
     if not remoteTag:
         raise SystemExit(
             f"Cannot reuse {tagName} because the remote tag does not exist. "
-            "Run without --reuse-tag to create it."
+            "Run without --reuseTag to create it."
         )
     if remoteTag != head:
         raise SystemExit(
             f"Cannot reuse {tagName} because the remote tag does not point at HEAD. "
-            "Use --replace-tag to move it."
+            "Use --replaceTag to move it."
         )
 
 
@@ -886,7 +886,7 @@ def buildWheel(context: PublishContext, skipBuild: bool) -> Path:
         return requireWheel(context.projectRoot, context.version)
 
     runCommand(
-        [sys.executable, "scripts/build.py", "--no-spinner"],
+        [sys.executable, "scripts/build.py", "--noSpinner"],
         context.projectRoot,
         dryRun=context.dryRun,
         mutates=True,
@@ -997,7 +997,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parseArgs(argv)
     projectRoot = Path(__file__).resolve().parent.parent
-    ui = PublishUi(dryRun=args.dry_run)
+    ui = PublishUi(dryRun=args.dryRun)
 
     try:
         requireProjectRoot(projectRoot)
@@ -1019,17 +1019,17 @@ def main(argv: list[str] | None = None) -> int:
         ui.finishStep()
 
         context = PublishContext(
-            dryRun=args.dry_run,
+            dryRun=args.dryRun,
             projectRoot=projectRoot,
             tagName=tagName,
             version=version,
         )
 
         ui.step("🔁 Verify branch sync")
-        if args.push_branch:
+        if args.pushBranch:
             ui.substep(f"Pushing branch: {branchName}")
             pushCurrentBranch(context, branchName)
-            if not args.dry_run:
+            if not args.dryRun:
                 requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
         else:
             requireHeadSyncedToUpstream(projectRoot, branchName, upstreamBranch)
@@ -1037,10 +1037,10 @@ def main(argv: list[str] | None = None) -> int:
         ui.finishStep()
 
         ui.step("🏷️  Validate release tag")
-        if args.reuse_tag:
+        if args.reuseTag:
             requireExistingTagAtHead(projectRoot, tagName)
             ui.substep(f"Reusing existing tag: {tagName}")
-        elif not args.replace_tag:
+        elif not args.replaceTag:
             requireTagAvailable(projectRoot, tagName)
             requireGhReleaseAvailable(projectRoot, tagName)
             ui.substep(f"Tag is available: {tagName}")
@@ -1049,7 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
         ui.finishStep()
 
         ui.step("🏗️  Build release wheel")
-        wheelPath = buildWheel(context, args.skip_build)
+        wheelPath = buildWheel(context, args.skipBuild)
         ui.substep(f"Wheel: {wheelPath}")
         ui.finishStep()
 
@@ -1057,8 +1057,8 @@ def main(argv: list[str] | None = None) -> int:
         publishRelease(
             context,
             wheelPath,
-            reuseTag=args.reuse_tag,
-            replaceTag=args.replace_tag,
+            reuseTag=args.reuseTag,
+            replaceTag=args.replaceTag,
         )
         ui.substep(f"Release: {tagName}")
         ui.substep("Assets: install.py, wheel")

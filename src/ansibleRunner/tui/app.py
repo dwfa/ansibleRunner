@@ -247,7 +247,8 @@ class AnsibleRunnerTui(App[int]):
         super().__init__()
         self.defaults = defaults
         self.title = "ansibleRunner"
-        self.sub_title = str(defaults.projectRoot)
+        self.sub_title = str(defaults.arPath)
+        self.playbookMenuDir = defaults.pbPath
 
     def compose(self) -> ComposeResult:
         """Compose application-level chrome.
@@ -290,6 +291,7 @@ class AnsibleRunnerTui(App[int]):
                 self.defaults,
                 self.showConfigureScreen,
                 self.showLaunchScreen,
+                self.playbookMenuDir,
             )
         )
 
@@ -317,6 +319,7 @@ class AnsibleRunnerTui(App[int]):
             saveKey: Keyboard key used to save or apply changes.
         """
 
+        self._rememberPlaybookDirectory(entry)
         body = self.query_one("#app-body", Container)
         await body.remove_children()
         await body.mount(
@@ -346,6 +349,8 @@ class AnsibleRunnerTui(App[int]):
             config: Optional one-run launch config.
             isEditOnce: Whether config contains one-run overrides.
         """
+
+        self._rememberPlaybookDirectory(entry)
 
         async def configureFromLaunch(configEntry: PlaybookEntry) -> None:
             """Open configure and return to launch afterward.
@@ -449,6 +454,14 @@ class AnsibleRunnerTui(App[int]):
         body = self.query_one("#app-body", Container)
         await body.remove_children()
         await body.mount(RunScreen(self.defaults, entry, config, argsDisplay, onBack))
+
+    def _rememberPlaybookDirectory(self, entry: PlaybookEntry) -> None:
+        """Remember the playbook directory to restore when returning to the menu."""
+
+        playbookRoot = self.defaults.pbPath.resolve()
+        entryDir = entry.path.parent.expanduser().resolve()
+        if entryDir == playbookRoot or playbookRoot in entryDir.parents:
+            self.playbookMenuDir = entryDir
 
 
 def runTui(defaults: RuntimeDefaults) -> int:

@@ -7,8 +7,8 @@
 #   python3 install.py
 #
 # WORKFLOW:
-#   1. Treat the current working directory as the Ansible project root.
-#   2. Create .venv under the project root when needed.
+#   1. Treat the current working directory as the ansibleRunner path.
+#   2. Create .venv under the ansibleRunner path when needed.
 #   3. Install ansibleRunner from GitHub into the project .venv.
 #   4. Write a thin project-local launcher.
 #
@@ -71,11 +71,11 @@ class InstallerUi:
     spinnerEvent: threading.Event = field(default_factory=threading.Event)
     spinnerThread: threading.Thread | None = None
 
-    def header(self, projectRoot: Path, venvDir: Path) -> None:
+    def header(self, arPath: Path, venvDir: Path) -> None:
         """Print the installer header panel.
 
         Args:
-            projectRoot: Ansible project root.
+            arPath: ansibleRunner path.
             venvDir: Project virtual environment directory.
         """
 
@@ -92,7 +92,7 @@ class InstallerUi:
             self._panelLine("", width),
         ]
         for label, value in (
-            ("Project", projectRoot),
+            ("arPath", arPath),
             ("Venv", venvDir),
             ("Log", self.logPath),
         ):
@@ -382,18 +382,18 @@ def main(argv: list[str] | None = None) -> int:
     """
 
     args = parseArgs(argv)
-    projectRoot = args.projectRoot.expanduser().resolve()
+    arPath = args.arPath.expanduser().resolve()
     venvDir = args.venvDir.expanduser()
     if not venvDir.is_absolute():
-        venvDir = projectRoot / venvDir
+        venvDir = arPath / venvDir
     installerRoot = Path(__file__).resolve().parent
     packageSpec = getPackageSpec(args, installerRoot)
-    launcherPath = projectRoot / args.launcherName
-    logPath = getInstallLogPath(projectRoot)
+    launcherPath = arPath / args.launcherName
+    logPath = getInstallLogPath(arPath)
     venvPython = getVenvPython(venvDir)
     ui = InstallerUi(logPath)
 
-    ui.header(projectRoot, venvDir)
+    ui.header(arPath, venvDir)
     try:
         ui.step("🧰 Prepare virtual environment")
         venvCreated = ensureVenv(venvDir, args.python, logPath, args.verbose)
@@ -420,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         ui.step("📝 Write project launcher")
         writeLauncher(launcherPath, venvDir)
         ui.substep(f"Wrote {launcherPath}")
-        staleLauncherPath = projectRoot / "ansibleRunner.py"
+        staleLauncherPath = arPath / "ansibleRunner.py"
         if launcherPath.name != "ansibleRunner.py" and staleLauncherPath.exists():
             ui.substep(f"Remove old launcher to avoid recursion: {staleLauncherPath}")
         ui.finishStep()
@@ -453,18 +453,18 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         description="Install ansibleRunner from GitHub into a project .venv."
     )
     parser.add_argument(
-        "--project-root",
-        dest="projectRoot",
+        "--arPath",
+        dest="arPath",
         type=Path,
-        default=Path(os.environ.get("ANSIBLE_RUNNER_PROJECT_ROOT", Path.cwd())),
-        help="Ansible project root. Defaults to the current directory.",
+        default=Path(os.environ.get("ANSIBLE_RUNNER_AR_PATH", Path.cwd())),
+        help="ansibleRunner path. Defaults to the current directory.",
     )
     parser.add_argument(
-        "--venv-dir",
+        "--venvDir",
         dest="venvDir",
         type=Path,
         default=Path(os.environ.get("ANSIBLE_RUNNER_VENV", ".venv")),
-        help="Virtual environment path. Relative paths are under project root.",
+        help="Virtual environment path. Relative paths are under arPath.",
     )
     parser.add_argument(
         "--python",
@@ -472,27 +472,27 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Python executable used to create the virtual environment.",
     )
     parser.add_argument(
-        "--repo-url",
+        "--repoUrl",
         dest="repoUrl",
         default=os.environ.get("ANSIBLE_RUNNER_REPO_URL", DEFAULT_REPO_URL),
-        help="Git repository URL used with --install-from-git.",
+        help="Git repository URL used with --installFromGit.",
     )
     parser.add_argument(
         "--ref",
         default=os.environ.get("ANSIBLE_RUNNER_REF", DEFAULT_REF),
-        help="Git ref used with --install-from-git.",
+        help="Git ref used with --installFromGit.",
     )
     parser.add_argument(
-        "--wheel-url",
+        "--wheelUrl",
         dest="wheelUrl",
         default=os.environ.get("ANSIBLE_RUNNER_WHEEL_URL"),
         help=(
-            "Release wheel URL used when --package-spec is not set. "
+            "Release wheel URL used when --packageSpec is not set. "
             "Defaults to the latest GitHub release wheel."
         ),
     )
     parser.add_argument(
-        "--install-from-git",
+        "--installFromGit",
         dest="installFromGit",
         action="store_true",
         default=os.environ.get("ANSIBLE_RUNNER_INSTALL_FROM_GIT") == "1",
@@ -501,7 +501,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "-w",
         "--whl",
-        "--package-spec",
+        "--packageSpec",
         dest="packageSpec",
         default=os.environ.get(
             "ANSIBLE_RUNNER_PACKAGE_SPEC",
@@ -513,7 +513,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--launcher-name",
+        "--launcherName",
         dest="launcherName",
         default=os.environ.get("ANSIBLE_RUNNER_LAUNCHER", DEFAULT_LAUNCHER_NAME),
         help="Project-local launcher filename to write.",
@@ -525,7 +525,7 @@ def parseArgs(argv: list[str] | None = None) -> argparse.Namespace:
         help="Show venv and pip output instead of writing it only to the log.",
     )
     parser.add_argument(
-        "--force-reinstall",
+        "--forceReinstall",
         dest="forceReinstall",
         action="store_true",
         default=os.environ.get("ANSIBLE_RUNNER_FORCE_REINSTALL") == "1",
@@ -635,18 +635,18 @@ def latestReleaseWheelUrl() -> str:
     )
 
 
-def getInstallLogPath(projectRoot: Path) -> Path:
+def getInstallLogPath(arPath: Path) -> Path:
     """Return the project-local installer log path.
 
     Args:
-        projectRoot: Ansible project root.
+        arPath: ansibleRunner path.
 
     Returns:
         Installer log path under ``logs``.
     """
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return projectRoot / "logs" / f"ansibleRunner-install-{timestamp}.log"
+    return arPath / "logs" / f"ansibleRunner-install-{timestamp}.log"
 
 
 def ensureVenv(
@@ -783,18 +783,18 @@ def writeLauncher(launcherPath: Path, venvDir: Path) -> None:
     launcherPath.chmod(0o755)
 
 
-def getLauncherText(projectRoot: Path, venvDir: Path) -> str:
+def getLauncherText(arPath: Path, venvDir: Path) -> str:
     """Return project launcher source text.
 
     Args:
-        projectRoot: Project root where the launcher is written.
+        arPath: ansibleRunner path where the launcher is written.
         venvDir: Virtual environment directory.
 
     Returns:
         Python launcher source code.
     """
 
-    venvExpression = getLauncherVenvExpression(projectRoot, venvDir)
+    venvExpression = getLauncherVenvExpression(arPath, venvDir)
     return f"""#!/usr/bin/env python3
 from __future__ import annotations
 
@@ -804,7 +804,7 @@ import sys
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+AR_PATH = Path(__file__).resolve().parent
 VENV_DIR = {venvExpression}
 if os.name == "nt":
     RUNNER = VENV_DIR / "Scripts" / "ansibleRunner.exe"
@@ -813,19 +813,19 @@ else:
 
 command = [
     str(RUNNER),
-    "--project-root",
-    str(PROJECT_ROOT),
+    "--arPath",
+    str(AR_PATH),
     *sys.argv[1:],
 ]
-raise SystemExit(subprocess.run(command, check=False, cwd=PROJECT_ROOT).returncode)
+raise SystemExit(subprocess.run(command, check=False, cwd=AR_PATH).returncode)
 """
 
 
-def getLauncherVenvExpression(projectRoot: Path, venvDir: Path) -> str:
+def getLauncherVenvExpression(arPath: Path, venvDir: Path) -> str:
     """Return source code for resolving the launcher virtual environment.
 
     Args:
-        projectRoot: Project root where the launcher is written.
+        arPath: ansibleRunner path where the launcher is written.
         venvDir: Virtual environment directory.
 
     Returns:
@@ -833,10 +833,10 @@ def getLauncherVenvExpression(projectRoot: Path, venvDir: Path) -> str:
     """
 
     try:
-        relativeVenv = venvDir.relative_to(projectRoot)
+        relativeVenv = venvDir.relative_to(arPath)
     except ValueError:
         return f"Path({str(venvDir)!r})"
-    return f"PROJECT_ROOT / {str(relativeVenv)!r}"
+    return f"AR_PATH / {str(relativeVenv)!r}"
 
 
 if __name__ == "__main__":

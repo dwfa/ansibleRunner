@@ -60,7 +60,7 @@ def testRenderConfigSummaryIncludesEnabledFlags() -> None:
     )
 
     assert renderConfigSummary(config) == (
-        "-d -c -s -t -n dns --output-level task --limit one"
+        "-d -c -s -t -n dns --outputLevel task --limit one"
     )
 
 
@@ -84,7 +84,7 @@ def testBuildRunnerArgvTranslatesConfig() -> None:
         "-t",
         "-n",
         "dns",
-        "--output-level",
+        "--outputLevel",
         "task",
         "--limit",
         "one",

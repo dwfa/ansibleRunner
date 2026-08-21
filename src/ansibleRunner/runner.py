@@ -2,7 +2,7 @@
 # Subprocess-backed Ansible command runner.
 #
 # USAGE:
-#   AnsibleCommandRunner(projectRoot).run(["ansible-playbook", "site.yml"])
+#   AnsibleCommandRunner(arPath).run(["ansible-playbook", "site.yml"])
 #
 # OUTPUT VARIABLES:
 #   - RunnerResult: Captured command result and derived progress snapshot.
@@ -211,17 +211,29 @@ class RunControl:
 
 
 class AnsibleCommandRunner:
-    """Runs Ansible commands from a project root."""
+    """Runs Ansible commands from an ansibleRunner path."""
 
-    def __init__(self, projectRoot: Path, logDir: Path | None = None) -> None:
-        """Initialize a subprocess runner for a project root.
+    def __init__(
+        self,
+        arPath: Path,
+        logDir: Path | None = None,
+        pbPath: Path | None = None,
+    ) -> None:
+        """Initialize a subprocess runner for an ansibleRunner path.
 
         Args:
-            projectRoot: Directory where commands should be executed.
+            arPath: Directory where commands should be executed.
             logDir: Optional directory for per-playbook run logs.
+            pbPath: Optional playbook root used for nested include helpers.
         """
 
-        self.projectRoot = projectRoot.expanduser().resolve()
+        self.arPath = arPath.expanduser().resolve()
+        self.usesDefaultPbPath = pbPath is None
+        self.pbPath = (
+            pbPath.expanduser().resolve()
+            if pbPath is not None
+            else self.arPath / "playbooks"
+        )
         self.logDir = self._resolveLogDir(logDir)
 
     @staticmethod
@@ -267,7 +279,7 @@ class AnsibleCommandRunner:
             help="Pass --list-tasks to ansible-playbook.",
         )
         parser.add_argument(
-            "--output-level",
+            "--outputLevel",
             choices=("play", "role", "task"),
             default="role",
             dest="outputLevel",
@@ -324,7 +336,7 @@ class AnsibleCommandRunner:
         if extraVars:
             command.extend(["--extra-vars", " ".join(extraVars)])
         command.extend(runnerOptions.extraArgs)
-        command.append(str(playbook))
+        command.append(self._buildPlaybookCommandArg(playbook))
         return tuple(command)
 
     def _buildPlaybookPathVar(self, playbook: str | Path) -> str:
@@ -339,7 +351,7 @@ class AnsibleCommandRunner:
         """
 
         playbookPath = self._resolvePlaybookPath(playbook)
-        playbookRoot = self.projectRoot / "playbooks"
+        playbookRoot = self.pbPath
         try:
             relativeParent = playbookPath.parent.relative_to(playbookRoot)
         except ValueError:
@@ -349,7 +361,7 @@ class AnsibleCommandRunner:
         return "../" * len(relativeParent.parts)
 
     def run(self, command: Sequence[str]) -> RunnerResult:
-        """Run a command in the configured project root.
+        """Run a command in the configured arPath.
 
         Args:
             command: Command and arguments to execute.
@@ -360,7 +372,7 @@ class AnsibleCommandRunner:
 
         completed = subprocess.run(
             list(command),
-            cwd=self.projectRoot,
+            cwd=self.arPath,
             check=False,
             text=True,
             capture_output=True,
@@ -519,7 +531,7 @@ class AnsibleCommandRunner:
                 [
                     "native_ansible_log=0",
                     "preflight_failure=1",
-                    f"cwd={self.projectRoot}",
+            f"cwd={self.arPath}",
                     message,
                     "",
                 ]
@@ -667,7 +679,7 @@ class AnsibleCommandRunner:
 
         process = subprocess.Popen(
             list(command),
-            cwd=self.projectRoot,
+            cwd=self.arPath,
             env=env,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE,
@@ -731,7 +743,7 @@ class AnsibleCommandRunner:
         process = subprocess.Popen(
             list(command),
             close_fds=True,
-            cwd=self.projectRoot,
+            cwd=self.arPath,
             env=env,
             preexec_fn=prepareChildPty,
             stderr=slaveFd,
@@ -811,7 +823,7 @@ class AnsibleCommandRunner:
         """Resolve a playbook path for filesystem validation.
 
         Args:
-            playbook: Project-relative or absolute playbook path.
+            playbook: arPath-relative, pbPath-relative, or absolute playbook path.
 
         Returns:
             Absolute playbook path.
@@ -820,15 +832,40 @@ class AnsibleCommandRunner:
         playbookPath = Path(playbook)
         if playbookPath.is_absolute():
             return playbookPath
-        return self.projectRoot / playbookPath
+        if self.usesDefaultPbPath:
+            return self.arPath / playbookPath
+        arCandidate = self.arPath / playbookPath
+        if arCandidate.exists() or self._looksArRelativePlaybookPath(playbookPath):
+            return arCandidate
+        return self.pbPath / playbookPath
+
+    def _buildPlaybookCommandArg(self, playbook: str | Path) -> str:
+        """Return the playbook argument passed to ``ansible-playbook``."""
+
+        playbookPath = Path(playbook)
+        if playbookPath.is_absolute():
+            return str(playbookPath)
+        if self.usesDefaultPbPath:
+            return str(playbookPath)
+        if (self.arPath / playbookPath).exists() or self._looksArRelativePlaybookPath(
+            playbookPath
+        ):
+            return str(playbookPath)
+        return str(self.pbPath / playbookPath)
+
+    @staticmethod
+    def _looksArRelativePlaybookPath(playbookPath: Path) -> bool:
+        """Return whether a relative playbook path is anchored from arPath."""
+
+        return bool(playbookPath.parts and playbookPath.parts[0] == "playbooks")
 
     def _resolveAnsiblePlaybookCommand(self) -> Path | str:
         """Prefer the project-local ansible-playbook command when installed."""
 
         if os.name == "nt":
-            projectCommand = self.projectRoot / ".venv" / "Scripts" / "ansible-playbook.exe"
+            projectCommand = self.arPath / ".venv" / "Scripts" / "ansible-playbook.exe"
         else:
-            projectCommand = self.projectRoot / ".venv" / "bin" / "ansible-playbook"
+            projectCommand = self.arPath / ".venv" / "bin" / "ansible-playbook"
         if projectCommand.exists():
             return projectCommand
         return "ansible-playbook"
@@ -848,7 +885,7 @@ class AnsibleCommandRunner:
         envLogDir = os.environ.get("LOG_DIR")
         if envLogDir:
             return Path(envLogDir).expanduser()
-        return RuntimeDefaults.forProject(self.projectRoot).logDir
+        return RuntimeDefaults.forArPath(self.arPath, self.pbPath).logDir
 
     @staticmethod
     def _cleanPtyText(text: str) -> str:

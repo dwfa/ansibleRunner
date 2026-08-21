@@ -49,6 +49,7 @@ class PlaybookMenuScreen(Container):
         defaults: RuntimeDefaults,
         onConfigure: ConfigureHandler | None = None,
         onLaunch: LaunchHandler | None = None,
+        currentDir: Path | None = None,
     ) -> None:
         """Initialize the playbook menu screen.
 
@@ -56,13 +57,14 @@ class PlaybookMenuScreen(Container):
             defaults: Resolved project runtime defaults.
             onConfigure: Callback that opens playbook configuration.
             onLaunch: Callback that opens playbook launch review.
+            currentDir: Directory under the playbook root to display.
         """
 
         super().__init__(id="playbook-menu")
         self.defaults = defaults
         self.entries: list[PlaybookEntry] = []
-        self.playbookRoot = self.defaults.projectRoot / "playbooks"
-        self.currentDir = self.playbookRoot
+        self.playbookRoot = self.defaults.pbPath
+        self.currentDir = currentDir or self.playbookRoot
         self.onConfigure = onConfigure
         self.onLaunch = onLaunch
 

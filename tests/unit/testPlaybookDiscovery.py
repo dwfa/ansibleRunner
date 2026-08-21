@@ -21,10 +21,12 @@ from pathlib import Path
 
 from ansibleRunner.playbooks.discovery import (
     directoryConfigKey,
+    directoryContainsPlaybook,
     discoverPlaybookEntries,
     discoverPlaybookDirectories,
     discoverPlaybooks,
     displayPlaybookName,
+    isAnsiblePlaybook,
     playbookConfigKey,
 )
 from ansibleRunner.playbooks.models import PlaybookConfig
@@ -38,26 +40,66 @@ def testDiscoverPlaybooksReturnsTopLevelYamlOnly(tmp_path: Path) -> None:
     nestedDir.mkdir(parents=True)
     sitePlaybook = playbookDir / "site.yaml"
     shortPlaybook = playbookDir / "short.yml"
+    varsFile = playbookDir / "paths.yaml"
     otherFile = playbookDir / "notes.txt"
     nestedPlaybook = nestedDir / "nested.yaml"
-    sitePlaybook.write_text("---\n", encoding="utf-8")
-    shortPlaybook.write_text("---\n", encoding="utf-8")
+    sitePlaybook.write_text(_playbookText("# Site\n"), encoding="utf-8")
+    shortPlaybook.write_text(_playbookText("# Short\n"), encoding="utf-8")
+    varsFile.write_text("tasksPath: ../tasks\nvarsPath: ../vars\n", encoding="utf-8")
     otherFile.write_text("notes\n", encoding="utf-8")
-    nestedPlaybook.write_text("---\n", encoding="utf-8")
+    nestedPlaybook.write_text(_playbookText("# Nested\n"), encoding="utf-8")
 
     assert discoverPlaybooks(playbookDir) == [shortPlaybook, sitePlaybook]
 
 
+def testDiscoverPlaybooksSkipsYamlVarsFiles(tmp_path: Path) -> None:
+    """Verify YAML vars files are not listed as runnable playbooks."""
+
+    playbookDir = tmp_path / "playbooks"
+    playbookDir.mkdir()
+    playbook = playbookDir / "site.yaml"
+    varsFile = playbookDir / "paths.yaml"
+    playbook.write_text(_playbookText("# Site\n"), encoding="utf-8")
+    varsFile.write_text("tasksPath: ../tasks\nvarsPath: ../vars\n", encoding="utf-8")
+
+    assert discoverPlaybooks(playbookDir) == [playbook]
+    assert isAnsiblePlaybook(playbook) is True
+    assert isAnsiblePlaybook(varsFile) is False
+
+
+def testDiscoverPlaybooksAllowsCommentedYamlMarker(tmp_path: Path) -> None:
+    """Verify playbooks may annotate the YAML document marker."""
+
+    playbookDir = tmp_path / "playbooks"
+    playbookDir.mkdir()
+    playbook = playbookDir / "site.yaml"
+    playbook.write_text(
+        "---                                            # identifies YAML\n"
+        "- name: Site\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
+        encoding="utf-8",
+    )
+
+    assert discoverPlaybooks(playbookDir) == [playbook]
+
+
 def testDiscoverPlaybookDirectoriesReturnsVisibleDirectories(tmp_path: Path) -> None:
-    """Verify direct visible playbook grouping directories are discovered."""
+    """Verify visible directories with playbooks are discovered."""
 
     playbookDir = tmp_path / "playbooks"
     dbDir = playbookDir / "db"
+    varsDir = playbookDir / "vars"
     hiddenDir = playbookDir / ".hidden"
     dbDir.mkdir(parents=True)
+    varsDir.mkdir()
     hiddenDir.mkdir()
+    (dbDir / "list-pb.yaml").write_text(_playbookText("# List\n"), encoding="utf-8")
+    (varsDir / "paths.yaml").write_text("tasksPath: ../tasks\n", encoding="utf-8")
 
     assert discoverPlaybookDirectories(playbookDir) == [dbDir]
+    assert directoryContainsPlaybook(dbDir) is True
+    assert directoryContainsPlaybook(varsDir) is False
 
 
 def testDiscoverPlaybooksReturnsEmptyForMissingDirectory(tmp_path: Path) -> None:
@@ -76,7 +118,10 @@ def testDiscoverPlaybookEntriesIncludeTitleAndConfig(tmp_path: Path) -> None:
         "##############################################################################\n"
         "# Configure DNS services\n"
         "##############################################################################\n"
-        "---\n",
+        "---\n"
+        "- name: Configure DNS services\n"
+        "  hosts: all\n"
+        "  tasks: []\n",
         encoding="utf-8",
     )
 
@@ -99,8 +144,10 @@ def testDiscoverPlaybookEntriesShowsDirectoriesBeforePlaybooks(tmp_path: Path) -
     playbookDir = tmp_path / "playbooks"
     dbDir = playbookDir / "db"
     dbDir.mkdir(parents=True)
+    nestedPlaybook = dbDir / "list-pb.yaml"
     playbook = playbookDir / "site.yaml"
-    playbook.write_text("# Site\n---\n", encoding="utf-8")
+    nestedPlaybook.write_text(_playbookText("# List\n"), encoding="utf-8")
+    playbook.write_text(_playbookText("# Site\n"), encoding="utf-8")
 
     entries = discoverPlaybookEntries(playbookDir)
 
@@ -116,7 +163,7 @@ def testDiscoverPlaybookEntriesCanListNestedDirectory(tmp_path: Path) -> None:
     dbDir = playbookDir / "db"
     dbDir.mkdir(parents=True)
     playbook = dbDir / "listServers-pb.yaml"
-    playbook.write_text("# List DB servers\n---\n", encoding="utf-8")
+    playbook.write_text(_playbookText("# List DB servers\n"), encoding="utf-8")
 
     entries = discoverPlaybookEntries(
         playbookDir,
@@ -152,3 +199,15 @@ def testDisplayPlaybookNamePreservesOtherNames(tmp_path: Path) -> None:
     """Verify display names preserve non-conventional names."""
 
     assert displayPlaybookName(tmp_path / "site.yaml") == "site"
+
+
+def _playbookText(header: str = "") -> str:
+    """Return a minimal valid Ansible playbook fixture."""
+
+    return (
+        header
+        + "---\n"
+        + "- name: Test play\n"
+        + "  hosts: all\n"
+        + "  tasks: []\n"
+    )

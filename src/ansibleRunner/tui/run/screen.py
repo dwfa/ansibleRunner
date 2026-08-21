@@ -26,6 +26,7 @@ from time import monotonic
 from typing import Literal, cast
 
 from rich import box
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -33,6 +34,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.selection import Selection
 from textual.widgets import Input, Static
 
 from ansibleRunner.defaults import RuntimeDefaults
@@ -80,6 +82,33 @@ STATUS_STYLES = {
     "running": "cyan",
     "succeeded": "green",
 }
+
+
+class RunProgress(Static):
+    """Progress widget with selectable plain text backing."""
+
+    def __init__(
+        self,
+        content: RenderableType = "",
+        *,
+        id: str | None = None,
+    ) -> None:
+        """Initialize the progress widget."""
+
+        super().__init__(content, id=id)
+        self.selectionText = ""
+
+    def setSelectionText(self, text: str) -> None:
+        """Set the plain text used for terminal selection copy."""
+
+        self.selectionText = text
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        """Return selected progress text even when the display uses Rich tables."""
+
+        if not self.selectionText:
+            return None
+        return selection.extract(self.selectionText), "\n"
 
 
 class RunScreen(Container):
@@ -165,7 +194,7 @@ class RunScreen(Container):
             yield Static("Starting ...", id="run-status")
             yield Static("", id="run-failure")
             with VerticalScroll(id="run-progress-scroll"):
-                yield Static(
+                yield RunProgress(
                     Text("Waiting for Ansible progress ...", style="dim"),
                     id="run-progress",
                 )
@@ -354,10 +383,10 @@ class RunScreen(Container):
             defaults: Resolved runtime defaults.
 
         Returns:
-            Command runner rooted in the current project.
+            Command runner rooted in the current arPath.
         """
 
-        return AnsibleCommandRunner(defaults.projectRoot, defaults.logDir)
+        return AnsibleCommandRunner(defaults.arPath, defaults.logDir, defaults.pbPath)
 
     def _finishRun(self, result: RunnerResult) -> None:
         """Render final run status.
@@ -369,7 +398,10 @@ class RunScreen(Container):
         self.runEndTime = monotonic()
         self.result = result
         self.running = False
+        self._useResultEventLogPath(result)
+        self._drainEventLogUpdates()
         self._finalizeProgress(result)
+        self._refreshProgress()
         status = self.query_one("#run-status", Static)
         helpText = self.query_one("#run-help", Static)
         helpText.update(self._completedHelpText())
@@ -457,11 +489,14 @@ class RunScreen(Container):
         self._detectPrettyOutputInclude(cleanLine)
         self.progressParser.processLine(cleanLine, now)
         if resultMatch and resultMatch.group(1) in {"ok", "changed"}:
-            self._startSyntheticTaskAfterResult(
-                activeRoleName,
-                activeTaskName,
-                now,
-            )
+            if self.pendingSyntheticTaskAfterPrompt is not None:
+                self._startPendingSyntheticTask(now)
+            else:
+                self._startSyntheticTaskAfterResult(
+                    activeRoleName,
+                    activeTaskName,
+                    now,
+                )
         self._detectPrompt(cleanLine, now)
         self.progressRows = self.progressParser.rows(now)
 
@@ -474,13 +509,16 @@ class RunScreen(Container):
         taskHeader = taskMatch.group(1)
         taskName = taskHeader.split(" : ", 1)[-1]
         promptMode = self._promptModeFromTaskName(taskName)
+        if promptMode is None:
+            if taskName.strip().lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
+                return True
+            self._clearPendingPrompt()
+            return False
         if self.pendingPromptMode is None or self.pendingPromptMode != promptMode:
             if self.pendingPromptMode is not None:
                 self._clearPendingPrompt()
-            return False
-        if promptMode is None:
-            self._clearPendingPrompt()
-            return False
+            return True
+        self.progressParser.suppressActiveTask(now)
         promptTitle = self._promptTitleFromTaskName(taskName)
         self._startPrompt(
             self._latestPromptMessageFromLog(promptTitle, promptMode)
@@ -509,6 +547,14 @@ class RunScreen(Container):
         self.eventLogPath = Path(line.removeprefix(EVENT_LOG_PREFIX)).expanduser()
         self.eventLogOffset = 0
 
+    def _useResultEventLogPath(self, result: RunnerResult) -> None:
+        """Use the completed runner result event log when status output was missed."""
+
+        if self.eventLogPath is not None or result.eventLogPath is None:
+            return
+        self.eventLogPath = result.eventLogPath.expanduser()
+        self.eventLogOffset = 0
+
     def _processEventLogUpdates(self) -> None:
         """Process newly written Ansible callback events."""
 
@@ -517,19 +563,33 @@ class RunScreen(Container):
         try:
             with self.eventLogPath.open("r", encoding="utf-8") as eventLog:
                 eventLog.seek(self.eventLogOffset)
-                eventLines = eventLog.readlines()
-                self.eventLogOffset = eventLog.tell()
+                while True:
+                    lineStartOffset = eventLog.tell()
+                    line = eventLog.readline()
+                    if not line:
+                        break
+                    if not line.endswith("\n"):
+                        break
+                    if not line.strip():
+                        self.eventLogOffset = eventLog.tell()
+                        continue
+                    try:
+                        eventRecord = json.loads(line)
+                    except json.JSONDecodeError:
+                        eventLog.seek(lineStartOffset)
+                        break
+                    self.eventLogOffset = eventLog.tell()
+                    self._processEventRecord(eventRecord)
         except OSError:
             return
 
-        for line in eventLines:
-            if not line.strip():
-                continue
-            try:
-                eventRecord = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            self._processEventRecord(eventRecord)
+    def _drainEventLogUpdates(self) -> None:
+        """Process pending callback events before final rendering."""
+
+        previousOffset = -1
+        while self.eventLogOffset != previousOffset:
+            previousOffset = self.eventLogOffset
+            self._processEventLogUpdates()
 
     def _processEventRecord(self, eventRecord: dict[str, object]) -> None:
         """Process one structured Ansible callback event."""
@@ -559,6 +619,12 @@ class RunScreen(Container):
         }:
             self._recordPrettyOutputFromEvent(eventRecord)
             resultState = self._resultStateFromEvent(eventName)
+            resultRecord = self._eventResultRecord(eventRecord)
+            taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
+            if taskHeader and not self.progressParser.resultAppliesToCurrentTask(
+                taskHeader
+            ):
+                return
             if resultState:
                 self.progressParser.processLine(f"{resultState}: [localhost]", now)
             return
@@ -606,9 +672,16 @@ class RunScreen(Container):
         """Process one structured include callback event."""
 
         filename = str(include.get("filename") or "")
-        if self._niceWrapperKindFromPath(filename) != "display":
+        wrapperKind = self._niceWrapperKindFromPath(filename)
+        if wrapperKind is None:
             return
         task = include.get("task")
+        if isinstance(task, dict):
+            taskHeader = self._taskHeaderFromEvent(task)
+            if taskHeader:
+                self.progressParser.suppressTask(taskHeader, monotonic())
+        if wrapperKind != "display":
+            return
         if isinstance(task, dict):
             self._startPrettyOutputAnchor(task, monotonic())
             return
@@ -772,12 +845,19 @@ class RunScreen(Container):
         if not title or not body:
             return
         targetTaskHeader = self.pendingPrettyOutputTaskHeader or taskHeader
-        self.progressParser.recordTaskOutput(
+        outputRecorded = self.progressParser.recordTaskOutput(
             targetTaskHeader,
             title,
             body,
             hideTaskRow=True,
         )
+        if not outputRecorded and targetTaskHeader != taskHeader:
+            self.progressParser.recordTaskOutput(
+                taskHeader,
+                title,
+                body,
+                hideTaskRow=True,
+            )
         self.pendingPrettyOutputTaskHeader = None
         self.pendingPrettyOutputTitle = None
 
@@ -966,7 +1046,8 @@ class RunScreen(Container):
         else:
             failure.display = False
             failure.update("")
-        progress = self.query_one("#run-progress", Static)
+        progress = self.query_one("#run-progress", RunProgress)
+        progress.setSelectionText(self._progressSelectionText())
         progress.update(self._renderProgress())
         self._refreshPromptPanel()
         if self.running and self.followProgress:
@@ -1054,7 +1135,7 @@ class RunScreen(Container):
             return False
         return True
 
-    def _renderProgress(self) -> Table | Text:
+    def _renderProgress(self) -> RenderableType:
         """Build rich progress renderable for the run panel.
 
         Returns:
@@ -1066,21 +1147,60 @@ class RunScreen(Container):
                 return Text("Waiting for Ansible progress ...", style="dim")
             return Text("No parsed Ansible progress was detected.", style="dim")
 
+        renderables: list[RenderableType] = []
+        table = self._newProgressTable()
+        tableHasRows = False
+        for rowIndex, row in enumerate(self.progressRows):
+            if row.output is not None:
+                if tableHasRows:
+                    renderables.append(table)
+                    table = self._newProgressTable()
+                    tableHasRows = False
+                renderables.append(Text(""))
+                renderables.append(self._prettyOutputPanel(row.output))
+                continue
+            table.add_row(
+                self._rowLabel(row, self.progressRows, rowIndex),
+                Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
+                Text(self._rowTimer(row), style="dim"),
+            )
+            tableHasRows = True
+        if tableHasRows:
+            renderables.append(table)
+        if len(renderables) == 1:
+            return renderables[0]
+        return Group(*renderables)
+
+    @staticmethod
+    def _newProgressTable() -> Table:
+        """Create the progress table used for structural run rows."""
+
         table = Table.grid(expand=True, padding=(0, 2))
         table.add_column(no_wrap=True, overflow="ellipsis", ratio=1)
         table.add_column(justify="right", no_wrap=True, width=1)
         table.add_column(justify="right", no_wrap=True, width=9)
-        for row in self.progressRows:
-            if row.output is not None:
-                table.add_row(Text(""), Text(""), Text(""))
-                table.add_row(self._prettyOutputPanel(row.output), Text(""), Text(""))
-                continue
-            table.add_row(
-                self._rowLabel(row),
-                Text(self._statusIcon(row.status), style=STATUS_STYLES[row.status]),
-                Text(self._rowTimer(row), style="dim"),
-            )
         return table
+
+    def _progressSelectionText(self) -> str:
+        """Return visible progress rows as plain text for selection copy."""
+
+        lines: list[str] = []
+        for rowIndex, row in enumerate(self.progressRows):
+            if row.output is not None:
+                if lines:
+                    lines.append("")
+                lines.extend(
+                    [
+                        stripArMarkup(row.output.title),
+                        stripArMarkup(row.output.body),
+                    ]
+                )
+                continue
+            label = self._rowLabel(row, self.progressRows, rowIndex).plain
+            status = self._statusIcon(row.status)
+            timer = self._rowTimer(row)
+            lines.append(f"{label} {status} {timer}".rstrip())
+        return "\n".join(lines)
 
     @staticmethod
     def _prettyOutputPanel(output: PrettyOutput) -> Panel:
@@ -1177,12 +1297,12 @@ class RunScreen(Container):
             duration,
             aborted=aborted,
             failed=failed,
+            startTime=self.activePromptStart,
         )
         if not aborted and not failed:
             self.pendingSyntheticTaskAfterPrompt = self._syntheticTaskAfterPrompt(
                 promptMessage
             )
-            self._startPendingSyntheticTask(monotonic())
         self.activePromptFromInclude = False
         self.activePromptInput = ""
         self.activePromptMessage = None
@@ -1473,7 +1593,7 @@ class RunScreen(Container):
         if self.result is None or self.result.logPath is None:
             return "unavailable"
         try:
-            return str(self.result.logPath.relative_to(self.defaults.projectRoot))
+            return str(self.result.logPath.relative_to(self.defaults.arPath))
         except ValueError:
             return str(self.result.logPath)
 
@@ -1518,12 +1638,18 @@ class RunScreen(Container):
             return f"[{minutes}m {seconds:02d}s]"
         return f"[{max(0.0, duration):.1f}s]"
 
-    @staticmethod
-    def _rowLabel(row: ProgressRow) -> Text:
+    def _rowLabel(
+        self,
+        row: ProgressRow,
+        rows: list[ProgressRow],
+        rowIndex: int,
+    ) -> Text:
         """Build the left-hand progress tree label.
 
         Args:
             row: Parsed progress row.
+            rows: Full list of parsed progress rows.
+            rowIndex: Index of the row being rendered.
 
         Returns:
             Tree label with an icon and display name.
@@ -1531,9 +1657,39 @@ class RunScreen(Container):
 
         if row.depth == 0:
             return Text(f"{row.icon} {row.name}")
-        if row.depth == 1:
-            return Text(f"   └─ {row.icon} {row.name}")
-        return Text(f"      └─ {row.icon} {row.name}")
+        return Text(f"{self._treePrefix(rows, rowIndex)}{row.icon} {row.name}")
+
+    def _treePrefix(self, rows: list[ProgressRow], rowIndex: int) -> str:
+        """Return the tree guide prefix for a progress row."""
+
+        depth = rows[rowIndex].depth
+        if depth <= 0:
+            return ""
+        prefix = ""
+        for ancestorDepth in range(1, depth):
+            if self._hasLaterSibling(rows, rowIndex, ancestorDepth):
+                prefix += "│  "
+            else:
+                prefix += "   "
+        branch = "├─ " if self._hasLaterSibling(rows, rowIndex, depth) else "└─ "
+        return f"   {prefix}{branch}"
+
+    @staticmethod
+    def _hasLaterSibling(
+        rows: list[ProgressRow],
+        rowIndex: int,
+        depth: int,
+    ) -> bool:
+        """Return whether a later row exists at the same tree depth."""
+
+        for candidate in rows[rowIndex + 1 :]:
+            if candidate.output is not None:
+                continue
+            if candidate.depth < depth:
+                return False
+            if candidate.depth == depth:
+                return True
+        return False
 
     def _statusIcon(self, status: str) -> str:
         """Return the status icon for a progress row.

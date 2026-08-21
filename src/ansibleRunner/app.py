@@ -2,10 +2,10 @@
 # Application and menu orchestration for ansibleRunner.
 #
 # USAGE:
-#   main(projectRoot, argv)
+#   main(arPath, argv, pbPath)
 #
 # WORKFLOW:
-#   1. Resolve project-local runtime defaults.
+#   1. Resolve ansibleRunner runtime defaults.
 #   2. Parse application-level command-line options.
 #   3. Run the selected menu or diagnostic workflow.
 #
@@ -40,14 +40,21 @@ def buildParser() -> argparse.ArgumentParser:
         description="Run project-local Ansible management workflows.",
     )
     parser.add_argument(
-        "--project-root",
-        dest="projectRoot",
+        "--arPath",
+        dest="arPath",
         type=Path,
         default=None,
-        help="Project root containing playbooks, logs, and state.",
+        help="ansibleRunner path containing logs, state, and default playbooks.",
     )
     parser.add_argument(
-        "--list-defaults",
+        "--pbPath",
+        dest="pbPath",
+        type=Path,
+        default=None,
+        help="Playbook root to show and run instead of arPath/playbooks.",
+    )
+    parser.add_argument(
+        "--listDefaults",
         dest="listDefaults",
         action="store_true",
         help="Print resolved log and state defaults, then exit.",
@@ -56,17 +63,23 @@ def buildParser() -> argparse.ArgumentParser:
 
 
 class AnsibleRunnerApp:
-    """Coordinates menu flow and command execution for a project root."""
+    """Coordinates menu flow and command execution for an arPath."""
 
-    def __init__(self, projectRoot: Path, defaults: RuntimeDefaults | None = None) -> None:
-        """Initialize the application for a project root.
+    def __init__(
+        self,
+        arPath: Path,
+        defaults: RuntimeDefaults | None = None,
+        pbPath: Path | None = None,
+    ) -> None:
+        """Initialize the application for an ansibleRunner path.
 
         Args:
-            projectRoot: Root directory for project-local logs and state.
+            arPath: Directory for ansibleRunner logs, state, and command cwd.
             defaults: Optional pre-resolved runtime defaults.
+            pbPath: Optional playbook root override.
         """
 
-        self.defaults = defaults or RuntimeDefaults.forProject(projectRoot)
+        self.defaults = defaults or RuntimeDefaults.forArPath(arPath, pbPath)
 
     def run(self, argv: Sequence[str] | None = None) -> int:
         """Run the selected application workflow.
@@ -81,8 +94,10 @@ class AnsibleRunnerApp:
         parser = buildParser()
         args = parser.parse_args(list(argv or ()))
 
-        if args.projectRoot is not None:
-            self.defaults = RuntimeDefaults.forProject(args.projectRoot)
+        arPath = args.arPath or self.defaults.arPath
+        pbPath = args.pbPath or self.defaults.pbPath
+        if args.arPath is not None or args.pbPath is not None:
+            self.defaults = RuntimeDefaults.forArPath(arPath, pbPath)
 
         if args.listDefaults:
             self._printDefaults()
@@ -93,24 +108,31 @@ class AnsibleRunnerApp:
     def _printDefaults(self) -> None:
         """Print the resolved project-local runtime defaults."""
 
-        print(f"projectRoot={self.defaults.projectRoot}")
+        print(f"arPath={self.defaults.arPath}")
+        print(f"pbPath={self.defaults.pbPath}")
         print(f"logDir={self.defaults.logDir}")
         print(f"stateDir={self.defaults.stateDir}")
 
 
-def main(projectRoot: str | Path, argv: Sequence[str] | None = None) -> int:
-    """Run ansibleRunner for a project.
+def main(
+    arPath: str | Path | None = None,
+    argv: Sequence[str] | None = None,
+    pbPath: str | Path | None = None,
+) -> int:
+    """Run ansibleRunner for an ansibleRunner path.
 
     This is the stable handoff point for project-specific wrappers such as
-    `rpiMgmt`. Wrappers should resolve their own project root and pass it here.
+    `rpiMgmt`. Wrappers should resolve their own arPath and pass it here.
 
     Args:
-        projectRoot: Project root supplied by a thin project wrapper.
+        arPath: ansibleRunner path supplied by a thin project wrapper.
         argv: Optional command-line arguments excluding the executable name.
+        pbPath: Optional playbook root override.
 
     Returns:
         Process exit code from the application workflow.
     """
 
-    app = AnsibleRunnerApp(Path(projectRoot))
+    runnerPath = Path.cwd() if arPath is None else Path(arPath)
+    app = AnsibleRunnerApp(runnerPath, pbPath=Path(pbPath) if pbPath else None)
     return app.run(argv)

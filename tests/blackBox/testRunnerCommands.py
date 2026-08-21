@@ -33,7 +33,7 @@ def testBuildPlaybookCommandMirrorsWrapperFlags() -> None:
             "-t",
             "-n",
             "dns",
-            "--output-level",
+            "--outputLevel",
             "task",
             "-e",
             "custom=value",
@@ -117,4 +117,25 @@ def testBuildPlaybookCommandAddsNestedPlaybookPath() -> None:
         "--extra-vars",
         "playbookPath=../",
         "playbooks/db/listServers-pb.yaml",
+    )
+
+
+def testBuildPlaybookCommandUsesExplicitPlaybookRoot(tmp_path: Path) -> None:
+    """Verify pbPath-relative playbooks work outside arPath."""
+
+    arPath = tmp_path / "runner"
+    pbPath = tmp_path / "ansible" / "playbooks"
+    nestedDir = pbPath / "db"
+    nestedDir.mkdir(parents=True)
+    playbookPath = nestedDir / "listServers-pb.yaml"
+    playbookPath.write_text("---\n- hosts: localhost\n", encoding="utf-8")
+    runner = AnsibleCommandRunner(arPath, arPath / "logs", pbPath)
+
+    command = runner.buildPlaybookCommand("db/listServers-pb.yaml", "")
+
+    assert command == (
+        "ansible-playbook",
+        "--extra-vars",
+        "playbookPath=../",
+        str(playbookPath),
     )

@@ -54,11 +54,11 @@ def testParseArgsSupportsShortMaintainerFlags() -> None:
 
     args = publish.parseArgs(["-dr", "-sb", "-pb", "-ut"])
 
-    assert args.dry_run is True
-    assert args.skip_build is True
-    assert args.push_branch is True
-    assert args.reuse_tag is True
-    assert args.replace_tag is False
+    assert args.dryRun is True
+    assert args.skipBuild is True
+    assert args.pushBranch is True
+    assert args.reuseTag is True
+    assert args.replaceTag is False
 
 
 def testPublishUiAlignsStatusMarkerInStatusColumn() -> None:
@@ -141,14 +141,14 @@ def testRequireHeadSyncedRejectsAheadBranch(
         publish.requireHeadSyncedToUpstream(tmp_path, "main", "origin/main")
 
     assert "main has 1 local commit(s)" in str(exc.value)
-    assert "--push-branch" in str(exc.value)
+    assert "--pushBranch" in str(exc.value)
 
 
 def testPushCurrentBranchUsesOriginBranch(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    """Verify --push-branch pushes the current branch explicitly."""
+    """Verify --pushBranch pushes the current branch explicitly."""
 
     publish = _loadPublishModule()
     calls: list[list[str]] = []
@@ -234,7 +234,7 @@ def testPublishReleaseReusesTagAndClobbersExistingAssets(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    """Verify --reuse-tag skips tag creation and updates release assets."""
+    """Verify --reuseTag skips tag creation and updates release assets."""
 
     publish = _loadPublishModule()
     calls: list[list[str]] = []
@@ -280,7 +280,7 @@ def testPublishReleaseReplacesTagAndClobbersExistingAssets(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    """Verify --replace-tag force-moves the tag and updates release assets."""
+    """Verify --replaceTag force-moves the tag and updates release assets."""
 
     publish = _loadPublishModule()
     calls: list[list[str]] = []
@@ -328,7 +328,7 @@ def testRequireExistingTagAtHeadRejectsDifferentLocalTag(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    """Verify --reuse-tag refuses tags that do not point at HEAD."""
+    """Verify --reuseTag refuses tags that do not point at HEAD."""
 
     publish = _loadPublishModule()
 
@@ -353,7 +353,7 @@ def testRequireExistingTagAtHeadRejectsDifferentLocalTag(
         publish.requireExistingTagAtHead(tmp_path, "v1.2.3")
 
     assert "local tag does not point at HEAD" in str(exc.value)
-    assert "--replace-tag" in str(exc.value)
+    assert "--replaceTag" in str(exc.value)
 
 
 def _loadPublishModule() -> Any:

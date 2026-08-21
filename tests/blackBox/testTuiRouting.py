@@ -33,7 +33,7 @@ def testAppLaunchesTuiWhenNoDiagnosticFlag(
     def fakeRunTui(defaults: Any) -> int:
         """Capture TUI launch defaults."""
 
-        calls.append(defaults.projectRoot)
+        calls.append(defaults.arPath)
         return 0
 
     monkeypatch.setattr("ansibleRunner.app.runTui", fakeRunTui)
