@@ -136,6 +136,26 @@ def testPrettyOutputClipboardTextStripsArMarkup(tmp_path: Path) -> None:
     assert runScreen._prettyOutputClipboardText() == "Done\nstatus = ok"
 
 
+def testAbortedProgressRowsRenderCancelIcon(tmp_path: Path) -> None:
+    """Verify canceled rows render a semantic cancel icon."""
+
+    runScreen = createRunScreen(tmp_path)
+    runScreen.progressRows = [
+        ProgressRow(
+            depth=0,
+            duration=1.0,
+            icon="🎭",
+            name="Configure DNS services",
+            status="aborted",
+        ),
+    ]
+
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert "⦸" in renderedProgress
+    assert "■" not in renderedProgress
+
+
 def testRunProgressSelectionUsesPlainTextBacking() -> None:
     """Verify rich progress output still exposes selectable text."""
 
@@ -1049,11 +1069,81 @@ def testTuiRunPanelHidesNiceDisplayIncludeWrapper(tmp_path: Path) -> None:
     runScreen.progressParser.finalizePlay(monotonic())
     rows = runScreen.progressParser.rows(now=monotonic())
 
-    assert [(row.depth, row.icon, row.name, row.output is not None) for row in rows] == [
+    actualRows = [
+        (row.depth, row.icon, row.name, row.output is not None)
+        for row in rows
+    ]
+    assert actualRows == [
         (0, "🎭", "Test a few roles", False),
         (1, "⚙", "ping", False),
         (2, "🔧", "ping", False),
         (1, "", "", True),
+    ]
+
+
+def testTuiRunPanelPrefersRoleQualifiedNiceDisplayResult(
+    tmp_path: Path,
+) -> None:
+    """Verify niceDisplay output stays under the role reported by its result."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "List Postgres Servers"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceDisplay.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "niceDisplay: Discovering Postgres Servers",
+                    "role": None,
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.command",
+                "name": "findDBServers",
+                "role": "findDBServers",
+            },
+        }
+    )
+    runScreen._processEventRecord({"event": "runner_ok", "result": {}})
+    runScreen._processEventRecord(
+        {
+            "event": "runner_ok",
+            "result": {
+                "msg": "AppName: [aztest]",
+                "task": {
+                    "action": "ansible.builtin.debug",
+                    "name": "niceDisplay: Discovering Postgres Servers",
+                    "role": "findDBServers",
+                },
+            },
+        }
+    )
+    runScreen.progressParser.finalizePlay(monotonic())
+    rows = runScreen.progressParser.rows(now=monotonic())
+
+    actualRows = [
+        (row.depth, row.icon, row.name, row.output is not None)
+        for row in rows
+    ]
+    assert actualRows == [
+        (0, "🎭", "List Postgres Servers", False),
+        (1, "⚙", "findDBServers", False),
+        (2, "🔧", "findDBServers", False),
+        (2, "", "", True),
     ]
 
 

@@ -71,7 +71,7 @@ PROMPT_TITLE_PREFIXES = {
 NICE_DISPLAY_TITLE_PREFIX = "nicedisplay:"
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
-    "aborted": "■",
+    "aborted": "⦸",
     "failed": "✗",
     "running": "",
     "succeeded": "✓",
@@ -844,12 +844,18 @@ class RunScreen(Container):
         body = self._prettyPayloadBody(self._prettyPayloadValue(resultRecord))
         if not title or not body:
             return
-        targetTaskHeader = self.pendingPrettyOutputTaskHeader or taskHeader
+        now = monotonic()
+        targetTaskHeader = self._prettyOutputTargetTaskHeader(
+            taskHeader,
+        )
+        if self.pendingPrettyOutputTaskHeader != targetTaskHeader:
+            self._suppressPendingPrettyOutputAnchor()
         outputRecorded = self.progressParser.recordTaskOutput(
             targetTaskHeader,
             title,
             body,
             hideTaskRow=True,
+            startTime=now,
         )
         if not outputRecorded and targetTaskHeader != taskHeader:
             self.progressParser.recordTaskOutput(
@@ -857,9 +863,29 @@ class RunScreen(Container):
                 title,
                 body,
                 hideTaskRow=True,
+                startTime=now,
             )
         self.pendingPrettyOutputTaskHeader = None
         self.pendingPrettyOutputTitle = None
+
+    def _suppressPendingPrettyOutputAnchor(self) -> None:
+        """Hide a stale niceDisplay anchor when a better result target appears."""
+
+        if self.pendingPrettyOutputTaskHeader:
+            self.progressParser.suppressTask(
+                self.pendingPrettyOutputTaskHeader,
+                monotonic(),
+            )
+
+    def _prettyOutputTargetTaskHeader(self, taskHeader: str) -> str:
+        """Return the best task header for a niceDisplay result."""
+
+        pendingTaskHeader = self.pendingPrettyOutputTaskHeader
+        if not pendingTaskHeader:
+            return taskHeader
+        if " : " not in pendingTaskHeader and " : " in taskHeader:
+            return taskHeader
+        return pendingTaskHeader
 
     @classmethod
     def _niceDisplayTitleFromTaskHeader(cls, taskHeader: str) -> str | None:

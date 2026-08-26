@@ -586,12 +586,14 @@ class AnsibleProgressParser:
         title: str,
         body: str,
         hideTaskRow: bool = False,
+        startTime: float | None = None,
     ) -> bool:
         """Record a human-friendly output block for a task.
 
         Args:
             body: Preformatted output body.
             hideTaskRow: Whether to suppress the owning task row in display rows.
+            startTime: Optional start time when creating a fallback output task.
             taskHeader: Ansible task header in optional ``role : task`` form.
             title: Short block title.
 
@@ -601,7 +603,7 @@ class AnsibleProgressParser:
 
         targetTask = self._findTaskByHeader(taskHeader)
         if targetTask is None:
-            targetTask = self._createHiddenOutputTask(taskHeader)
+            targetTask = self._createHiddenOutputTask(taskHeader, startTime)
         if targetTask is None:
             return False
         targetTask.outputs.append(
@@ -609,7 +611,11 @@ class AnsibleProgressParser:
         )
         return True
 
-    def _createHiddenOutputTask(self, taskHeader: str) -> ProgressItem | None:
+    def _createHiddenOutputTask(
+        self,
+        taskHeader: str,
+        startTime: float | None = None,
+    ) -> ProgressItem | None:
         """Create a hidden task to carry semantic output when structure is gone."""
 
         if self.currentPlay is None:
@@ -622,7 +628,7 @@ class AnsibleProgressParser:
         taskName, _hidden = self._displayNameAndHidden(taskName)
         task = ProgressItem(
             taskName,
-            self.currentPlay.startTime,
+            self.currentPlay.startTime if startTime is None else startTime,
             hidden=True,
             sawResult=True,
             sawExecutedResult=False,
