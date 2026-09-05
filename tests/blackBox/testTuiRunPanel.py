@@ -97,7 +97,7 @@ def createRunScreen(arPath: Path) -> RunScreen:
     )
 
 
-def testNiceWrapperTitlesStripArHideHint() -> None:
+def testNiceWrapperTitlesStripArDisplayHints() -> None:
     """Verify AR display hints do not leak into nice wrapper titles."""
 
     assert (
@@ -105,12 +105,12 @@ def testNiceWrapperTitlesStripArHideHint() -> None:
         == "Confirm write"
     )
     assert (
-        RunScreen._promptTitleFromTaskName("niceInput: Enter value @ar:hide")
+        RunScreen._promptTitleFromTaskName("niceInput: Enter value @ar:show")
         == "Enter value"
     )
     assert (
         RunScreen._stripNiceDisplayTitlePrefix(
-            "niceDisplay: Provisioning complete @ar:hide"
+            "niceDisplay: Provisioning complete @ar:show"
         )
         == "Provisioning complete"
     )
@@ -1193,6 +1193,71 @@ def testTuiRunPanelUsesNiceDisplayTaskNamePrefix(tmp_path: Path) -> None:
     assert "Server summary" in renderedProgress
     assert "NAME" in renderedProgress
     assert "niceDisplay:" not in renderedProgress
+
+
+def testTuiRunPanelRendersNiceFailCallbackPayload(tmp_path: Path) -> None:
+    """Verify niceFail callback results render as framed failed output."""
+
+    createPlaybook(tmp_path)
+    runScreen = createRunScreen(tmp_path)
+
+    runScreen._processEventRecord(
+        {
+            "event": "play_start",
+            "play": {"name": "Validate input"},
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "include",
+            "include": {
+                "filename": "/tmp/tasks/misc/niceFail.yaml",
+                "task": {
+                    "action": "ansible.builtin.include_tasks",
+                    "name": "Check required settings",
+                    "role": "validate",
+                },
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "task_start",
+            "task": {
+                "action": "ansible.builtin.fail",
+                "name": "niceFail: Missing required settings",
+                "path": "/tmp/tasks/misc/niceFail.yaml:2",
+                "role": "validate",
+            },
+        }
+    )
+    runScreen._processEventRecord(
+        {
+            "event": "runner_failed",
+            "result": {
+                "msg": [
+                    "server = [unset]",
+                    "env    = [dev]",
+                ],
+                "task": {
+                    "action": "ansible.builtin.fail",
+                    "name": "niceFail: Missing required settings",
+                    "role": "validate",
+                },
+            },
+        }
+    )
+    runScreen.progressRows = runScreen.progressParser.rows(now=monotonic())
+    renderedProgress = _renderRich(runScreen._renderProgress())
+
+    assert "Missing required settings" in renderedProgress
+    assert "server = [unset]" in renderedProgress
+    assert "env    = [dev]" in renderedProgress
+    assert "niceFail:" not in renderedProgress
+    assert [row.status for row in runScreen.progressRows if row.output is None] == [
+        "failed",
+        "failed",
+    ]
 
 
 def testTuiRunPanelCopiesOutputWithNativeClipboardTool(monkeypatch: Any) -> None:

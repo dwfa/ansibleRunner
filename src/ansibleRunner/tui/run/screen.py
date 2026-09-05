@@ -45,6 +45,7 @@ from ansibleRunner.progressParser import (
     ANSI_PATTERN,
     AnsibleProgressParser,
     AR_HIDE_HINT_PATTERN,
+    AR_SHOW_HINT_PATTERN,
     INCLUDED_PATTERN,
     OutputLevel,
     PrettyOutput,
@@ -56,7 +57,7 @@ from ansibleRunner.runner import AnsibleCommandRunner, RunControl, RunnerResult
 
 BackHandler = Callable[[], Awaitable[None]]
 PromptMode = Literal["continue", "text"]
-NiceWrapperKind = Literal["display", "input", "wait"]
+NiceWrapperKind = Literal["display", "fail", "input", "wait"]
 RunnerFactory = Callable[[RuntimeDefaults], AnsibleCommandRunner]
 
 
@@ -69,6 +70,7 @@ PROMPT_TITLE_PREFIXES = {
     "nicewait:": "continue",
 }
 NICE_DISPLAY_TITLE_PREFIX = "nicedisplay:"
+NICE_FAIL_TITLE_PREFIX = "nicefail:"
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STATUS_ICONS = {
     "aborted": "⦸",
@@ -621,9 +623,13 @@ class RunScreen(Container):
             resultState = self._resultStateFromEvent(eventName)
             resultRecord = self._eventResultRecord(eventRecord)
             taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
+            isNiceOutputResult = (
+                bool(taskHeader)
+                and self._niceOutputTitleFromTaskHeader(taskHeader) is not None
+            )
             if taskHeader and not self.progressParser.resultAppliesToCurrentTask(
                 taskHeader
-            ):
+            ) and not isNiceOutputResult:
                 return
             if resultState:
                 self.progressParser.processLine(f"{resultState}: [localhost]", now)
@@ -634,7 +640,7 @@ class RunScreen(Container):
         if not isinstance(task, dict):
             return
         wrapperKind = self._niceWrapperKindFromTask(task)
-        if wrapperKind == "display":
+        if wrapperKind in {"display", "fail"}:
             self._startPrettyOutputAnchor(task, now)
             return
         wrapperKind = self._niceWrapperKindFromPath(str(task.get("path") or ""))
@@ -656,7 +662,7 @@ class RunScreen(Container):
     ) -> bool:
         """Handle internal task starts from supported nice wrapper files."""
 
-        if wrapperKind == "display":
+        if wrapperKind in {"display", "fail"}:
             return True
         if wrapperKind == "wait":
             if self._promptModeFromTaskName(self._taskNameWithoutRole(task)) == "continue":
@@ -680,7 +686,7 @@ class RunScreen(Container):
             taskHeader = self._taskHeaderFromEvent(task)
             if taskHeader:
                 self.progressParser.suppressTask(taskHeader, monotonic())
-        if wrapperKind != "display":
+        if wrapperKind not in {"display", "fail"}:
             return
         if isinstance(task, dict):
             self._startPrettyOutputAnchor(task, monotonic())
@@ -756,6 +762,8 @@ class RunScreen(Container):
         fileName = normalizedPath.rsplit("/", 1)[-1]
         if fileName == "niceDisplay.yaml":
             return "display"
+        if fileName == "niceFail.yaml":
+            return "fail"
         if fileName == "niceInput.yaml":
             return "input"
         if fileName == "niceWait.yaml":
@@ -775,25 +783,40 @@ class RunScreen(Container):
         taskName = str(task.get("name") or "").strip()
         if " : " in taskName:
             taskName = taskName.split(" : ", 1)[1].strip()
-        taskName = cls._stripNiceDisplayTitlePrefix(taskName)
+        taskName = cls._stripNiceOutputTitlePrefix(taskName)
         return taskName or "Display"
 
     @classmethod
     def _stripNiceDisplayTitlePrefix(cls, title: str) -> str:
         """Remove the niceDisplay task-name title prefix."""
 
+        return cls._stripNiceOutputTitlePrefix(title)
+
+    @classmethod
+    def _stripNiceOutputTitlePrefix(cls, title: str) -> str:
+        """Remove nice output task-name title prefixes."""
+
         strippedTitle = title.strip()
         if strippedTitle.lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
-            return cls._stripArHideHint(strippedTitle[len(NICE_DISPLAY_TITLE_PREFIX) :])
-        return cls._stripArHideHint(strippedTitle)
+            return cls._stripArDisplayHints(
+                strippedTitle[len(NICE_DISPLAY_TITLE_PREFIX) :]
+            )
+        if strippedTitle.lower().startswith(NICE_FAIL_TITLE_PREFIX):
+            return cls._stripArDisplayHints(
+                strippedTitle[len(NICE_FAIL_TITLE_PREFIX) :]
+            )
+        return cls._stripArDisplayHints(strippedTitle)
 
     def _detectPrettyOutputInclude(self, line: str) -> None:
         """Detect native output for the display wrapper include."""
 
-        if not INCLUDED_PATTERN.match(line) or not self._isNiceDisplayPath(line):
+        if not INCLUDED_PATTERN.match(line):
+            return
+        wrapperKind = self._niceWrapperKindFromPath(line)
+        if wrapperKind not in {"display", "fail"}:
             return
         if self.progressParser.currentTask is not None:
-            self.pendingPrettyOutputTitle = self._stripNiceDisplayTitlePrefix(
+            self.pendingPrettyOutputTitle = self._stripNiceOutputTitlePrefix(
                 self.progressParser.currentTask.name
             )
             self.pendingPrettyOutputTaskHeader = self._currentTaskHeader()
@@ -833,7 +856,7 @@ class RunScreen(Container):
         if resultRecord is None:
             return
         taskHeader = self._taskHeaderFromResultEvent(eventRecord, resultRecord)
-        taskTitle = self._niceDisplayTitleFromTaskHeader(taskHeader)
+        taskTitle = self._niceOutputTitleFromTaskHeader(taskHeader)
         if taskTitle is None:
             return
         title = (
@@ -891,12 +914,22 @@ class RunScreen(Container):
     def _niceDisplayTitleFromTaskHeader(cls, taskHeader: str) -> str | None:
         """Return a niceDisplay title from a task header, when present."""
 
+        return cls._niceOutputTitleFromTaskHeader(taskHeader)
+
+    @classmethod
+    def _niceOutputTitleFromTaskHeader(cls, taskHeader: str) -> str | None:
+        """Return a nice output title from a task header, when present."""
+
         taskName = taskHeader.strip()
         if " : " in taskName:
             taskName = taskName.split(" : ", 1)[1].strip()
-        if not taskName.lower().startswith(NICE_DISPLAY_TITLE_PREFIX):
+        normalizedTaskName = taskName.lower()
+        if not (
+            normalizedTaskName.startswith(NICE_DISPLAY_TITLE_PREFIX)
+            or normalizedTaskName.startswith(NICE_FAIL_TITLE_PREFIX)
+        ):
             return None
-        return cls._stripNiceDisplayTitlePrefix(taskName) or "Display"
+        return cls._stripNiceOutputTitlePrefix(taskName) or "Display"
 
     @staticmethod
     def _eventResultRecord(
@@ -1537,14 +1570,16 @@ class RunScreen(Container):
         normalizedName = strippedName.lower()
         for prefix in PROMPT_TITLE_PREFIXES:
             if normalizedName.startswith(prefix):
-                return cls._stripArHideHint(strippedName[len(prefix) :])
+                return cls._stripArDisplayHints(strippedName[len(prefix) :])
         return None
 
     @staticmethod
-    def _stripArHideHint(value: str) -> str:
+    def _stripArDisplayHints(value: str) -> str:
         """Remove AR-only display hints from a prompt/display label."""
 
-        return AR_HIDE_HINT_PATTERN.sub(" ", value).strip()
+        value = AR_HIDE_HINT_PATTERN.sub(" ", value)
+        value = AR_SHOW_HINT_PATTERN.sub(" ", value)
+        return value.strip()
 
     @classmethod
     def _promptModeFromTaskName(cls, taskName: str) -> PromptMode | None:

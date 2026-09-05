@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ansibleRunner.progressParser import AnsibleProgressParser
 
 
@@ -407,6 +409,49 @@ def testParserHidesTasksMarkedWithArHide() -> None:
         ("⚙", "manageImage"),
         ("🔧", "Configure service"),
     ]
+
+
+def testParserShowsTasksMarkedWithArShowAtRoleOutputLevel() -> None:
+    """Verify @ar:show renders a task row at role output level."""
+
+    parser = AnsibleProgressParser(outputLevel="role")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    parser.processLine("TASK [manageImage : Copy image @ar:show] *****", now=2.0)
+
+    activeRows = parser.rows(now=4.0)
+
+    assert [(row.icon, row.name, row.status) for row in activeRows] == [
+        ("🎭", "Build image", "running"),
+        ("⚙", "manageImage", "running"),
+        ("🔧", "Copy image", "running"),
+    ]
+
+    parser.processLine("ok: [localhost]", now=5.0)
+    parser.processLine("TASK [manageImage : Cleanup temp files] *****", now=6.0)
+    parser.processLine("ok: [localhost]", now=7.0)
+    parser.finalizePlay(now=8.0)
+
+    rows = parser.rows(now=9.0)
+
+    assert [(row.icon, row.name) for row in rows] == [
+        ("🎭", "Build image"),
+        ("⚙", "manageImage"),
+        ("🔧", "Copy image"),
+    ]
+
+
+def testParserRejectsConflictingArDisplayHints() -> None:
+    """Verify @ar:show and @ar:hide cannot be combined."""
+
+    parser = AnsibleProgressParser(outputLevel="task")
+
+    parser.processLine("PLAY [Build image] ****************", now=1.0)
+    with pytest.raises(ValueError, match="cannot use @ar:show and @ar:hide"):
+        parser.processLine(
+            "TASK [manageImage : Copy image @ar:show @ar:hide] *****",
+            now=2.0,
+        )
 
 
 def testParserHidesRolesMarkedWithArHide() -> None:

@@ -14,9 +14,12 @@
 
 # Display Wrappers
 
-`ansibleRunner` can recognize small Ansible wrapper task files and render them
-as cleaner TUI prompts or display blocks. The wrappers are optional. A playbook
-can still run with normal `ansible-playbook`; the wrapper task names give AR a
+`ansibleRunner` supports AR display hints, such as `@ar:hide` and `@ar:show`,
+plus four small Ansible wrapper task files. The wrappers are split into two
+prompt wrappers, `niceWait` and `niceInput`, and two display wrappers,
+`niceDisplay` and `niceFail`. Together they let AR render cleaner TUI prompts,
+display blocks, and failure messages. The wrappers are optional. A playbook can
+still run with normal `ansible-playbook`; the wrapper task names give AR a
 stable title to read from Ansible output and callback events.
 
 Detection is based on the included wrapper filename, so the files may live
@@ -24,8 +27,10 @@ wherever a project keeps shared tasks.
 
 ## AR Display Hints
 
-Task, role, and play names may include `@ar:hide` when a row should be omitted
-from the AR progress tree while still running normally under Ansible.
+Task, role, and play names may include AR display hints. Use `@ar:hide` when a
+row should be omitted from the AR progress tree, and use `@ar:show` when a row
+should remain visible even when the selected `--outputLevel` would normally
+collapse it.
 
 ```yaml
 - name: "load temporary vars @ar:hide"
@@ -36,8 +41,13 @@ from the AR progress tree while still running normally under Ansible.
 Display rules:
 
 - AR strips `@ar:hide` from matching and display names.
+- AR strips `@ar:show` from matching and display names.
 - A hidden task suppresses that task row. For `niceDisplay`, this is how the
   wrapper task becomes only the boxed output block.
+- `@ar:show` forces a row to render even when the selected `--outputLevel`
+  would normally collapse it.
+- `@ar:hide` and `@ar:show` cannot be combined on the same name; AR treats that
+  as invalid playbook metadata.
 - A hidden role suppresses the role row when Ansible's emitted role segment
   contains `@ar:hide`; visible child tasks can still render.
 - A hidden play suppresses the play row; visible child roles/tasks can still
@@ -88,12 +98,21 @@ Prompt display rules:
 - Internal `nice*` wrapper task rows are hidden from the progress tree.
 - Completed prompt interactions remain visible in normal role/task progress.
 
+## Display Wrappers
+
+Use `niceDisplay.yaml` for boxed informational output and `niceFail.yaml` for
+boxed failure output that stops the playbook. Both display wrappers accept:
+
+- `title`: short box title shown by AR.
+- `data`: display payload printed by Ansible and rendered by AR. A string,
+  multiline block, list, or mapping can be used.
+
 ## AR Markup
 
-`title` and `data` values for `niceWait`, `niceInput`, and `niceDisplay` may
-use AR-only style tags. The tags are rendered by the TUI and stripped from
-copy/prompt summaries. Plain `ansible-playbook` output still shows the tags as
-ordinary text.
+`title` and `data` values for `niceWait`, `niceInput`, `niceDisplay`, and
+`niceFail` may use AR-only style tags. The tags are rendered by the TUI and
+stripped from copy/prompt summaries. Plain `ansible-playbook` output still
+shows the tags as ordinary text.
 
 Supported tags:
 
@@ -125,11 +144,7 @@ values like `[example-db-01]` and `[/tmp/currentRPiImage.img]` remain safe.
 ## niceDisplay
 
 Use `niceDisplay.yaml` when a task should render a boxed display block instead
-of a normal task row. In the playbook, include the wrapper file and pass:
-
-- `title`: short box title shown by AR.
-- `data`: display payload printed by Ansible and rendered by AR. A string,
-  multiline block, list, or mapping can be used.
+of a normal task row.
 
 Playbook usage:
 
@@ -155,6 +170,33 @@ Display rules:
 - If the same role has completed prompt interactions, those prompt rows are not
   appended below the boxed display block.
 - Press `y` to copy the full boxed output block.
+
+## niceFail
+
+Use `niceFail.yaml` when a task should stop the playbook with a clean boxed
+failure message.
+
+Playbook usage:
+
+```yaml
+- name: "Validate required settings"
+  ansible.builtin.include_tasks: "path/to/niceFail.yaml"
+  vars:
+    title: "Missing required settings"
+    data:
+      - "server = [unset]"
+      - "env    = [dev]"
+```
+
+Display rules:
+
+- The reusable wrapper task uses `niceFail:` in its own task name so AR can
+  read the title from Ansible output.
+- The include row and internal `niceFail` task row are hidden.
+- The boxed title and payload are shown before the failed run summary.
+- `niceFail:` is stripped from the boxed title.
+- Normal Ansible failure semantics are preserved; the playbook fails under AR
+  and under plain `ansible-playbook`.
 
 ## Wrapper Task Files
 
@@ -192,5 +234,14 @@ files live.
 ---
 - name: "niceDisplay: {{ title | default('Default Title') }}"
   ansible.builtin.debug:
+    msg: "{{ data }}"
+```
+
+`niceFail.yaml`:
+
+```yaml
+---
+- name: "niceFail: {{ title | default('Failure') }}"
+  ansible.builtin.fail:
     msg: "{{ data }}"
 ```

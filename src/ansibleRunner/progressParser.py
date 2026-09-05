@@ -29,6 +29,7 @@ PLAY_PATTERN = re.compile(r"^PLAY \[(.+?)\] \*+\s*$")
 TASK_PATTERN = re.compile(r"^TASK \[(.+?)\] \*+\s*$")
 HANDLER_PATTERN = re.compile(r"^RUNNING HANDLER \[(.+?)\] \*+\s*$")
 AR_HIDE_HINT_PATTERN = re.compile(r"(?:^|\s)@ar:hide(?:\s|$)")
+AR_SHOW_HINT_PATTERN = re.compile(r"(?:^|\s)@ar:show(?:\s|$)")
 FATAL_PATTERN = re.compile(r"^fatal: \[.+?\]:")
 INCLUDED_PATTERN = re.compile(r"^included: .+ for .+$")
 RESULT_PATTERN = re.compile(
@@ -62,6 +63,7 @@ class ProgressItem:
         aborted: Whether this item was aborted.
         duration: Completed duration in seconds.
         failed: Whether this item failed.
+        forceShow: Whether this item should render across output levels.
         result: Optional interaction result text.
         interactions: Prompt interactions under this item.
         outputs: Human-friendly output blocks associated with this item.
@@ -76,6 +78,7 @@ class ProgressItem:
     aborted: bool = False
     duration: float = 0.0
     failed: bool = False
+    forceShow: bool = False
     result: str = ""
     interactions: list["ProgressItem"] = field(default_factory=list)
     hidden: bool = False
@@ -137,14 +140,21 @@ class AnsibleProgressParser:
 
         playMatch = PLAY_PATTERN.match(cleanLine)
         if playMatch:
-            playName, hidden = self._displayNameAndHidden(playMatch.group(1))
+            playName, hidden, forceShow = self._displayNameAndHints(
+                playMatch.group(1)
+            )
             if (
                 self.currentPlay is not None
                 and self.currentPlay.name == playName
             ):
                 return
             self.finalizePlay(now)
-            self.currentPlay = ProgressItem(playName, now, hidden=hidden)
+            self.currentPlay = ProgressItem(
+                playName,
+                now,
+                forceShow=forceShow,
+                hidden=hidden,
+            )
             self.idleStartTime = None
             return
 
@@ -310,7 +320,7 @@ class AnsibleProgressParser:
             baseDepth = -1
         else:
             rows.append(self._row(0, "🎭", play, now, isActive))
-        if self.outputLevel == "play":
+        if self.outputLevel == "play" and not self._hasForcedDisplay(play):
             return
         playChildren: list[tuple[float, int, str, ProgressItem, bool]] = []
         if self.outputLevel == "task" or not self._hasVisibleTaskOutput(play):
@@ -338,10 +348,17 @@ class AnsibleProgressParser:
                     True,
                 )
             )
-        if self.outputLevel == "task" or self._hasVisibleTaskOutput(play):
+        if (
+            self.outputLevel == "task"
+            or self._hasVisibleTaskOutput(play)
+            or self._hasForcedDisplay(play)
+        ):
             playChildren.extend(
                 (task.startTime, len(playChildren), "task", task, False)
                 for task in play.tasks
+                if self.outputLevel == "task"
+                or task.forceShow
+                or bool(task.outputs)
             )
         if isActive and self.currentRole is None and self.currentTask is not None:
             playChildren.append(
@@ -370,7 +387,7 @@ class AnsibleProgressParser:
                     )
                 )
             elif self._taskIsVisible(child) and (
-                self.outputLevel == "task" or bool(child.outputs)
+                self.outputLevel == "task" or child.forceShow or bool(child.outputs)
             ):
                 self._appendTaskRows(
                     rows,
@@ -398,10 +415,17 @@ class AnsibleProgressParser:
         else:
             taskDepth = roleDepth
         roleChildren: list[tuple[float, int, str, ProgressItem, bool]] = []
-        if self.outputLevel == "task" or self._hasVisibleTaskOutput(role):
+        if (
+            self.outputLevel == "task"
+            or self._hasVisibleTaskOutput(role)
+            or self._hasForcedDisplay(role)
+        ):
             roleChildren.extend(
                 (task.startTime, len(roleChildren), "task", task, False)
                 for task in role.tasks
+                if self.outputLevel == "task"
+                or task.forceShow
+                or bool(task.outputs)
             )
         if self.outputLevel == "task" or not self._hasVisibleTaskOutput(role):
             roleChildren.extend(
@@ -418,7 +442,11 @@ class AnsibleProgressParser:
             isActive
             and self.currentTask is not None
             and self._taskIsVisible(self.currentTask)
-            and (self.outputLevel == "task" or bool(self.currentTask.outputs))
+            and (
+                self.outputLevel == "task"
+                or self.currentTask.forceShow
+                or bool(self.currentTask.outputs)
+            )
         ):
             roleChildren.append(
                 (
@@ -436,7 +464,7 @@ class AnsibleProgressParser:
             if childKind == "interaction":
                 rows.append(self._row(taskDepth, "💬", child, now, childIsActive))
             elif self._taskIsVisible(child) and (
-                self.outputLevel == "task" or bool(child.outputs)
+                self.outputLevel == "task" or child.forceShow or bool(child.outputs)
             ):
                 self._appendTaskRows(
                     rows,
@@ -463,7 +491,8 @@ class AnsibleProgressParser:
         )
         showOutputTaskRow = any(not output.hideTaskRow for output in task.outputs)
         showVisibleTaskRow = not task.hidden and (
-            (showTask and not hideOutputTaskRow) or showOutputTaskRow
+            ((showTask or task.forceShow) and not hideOutputTaskRow)
+            or showOutputTaskRow
         )
         if showVisibleTaskRow:
             rows.append(self._row(depth, "🔧", task, now, isActive))
@@ -487,6 +516,15 @@ class AnsibleProgressParser:
             task.outputs
             for role in item.roles
             for task in role.tasks
+        )
+
+    @staticmethod
+    def _hasForcedDisplay(item: ProgressItem) -> bool:
+        """Return whether descendants carry an AR show hint."""
+
+        return any(task.forceShow for task in item.tasks) or any(
+            role.forceShow or any(task.forceShow for task in role.tasks)
+            for role in item.roles
         )
 
     def _finalizeRole(self, now: float) -> None:
@@ -624,8 +662,8 @@ class AnsibleProgressParser:
         taskName = taskHeader
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
-            roleName, _hidden = self._displayNameAndHidden(roleName)
-        taskName, _hidden = self._displayNameAndHidden(taskName)
+            roleName, _hidden, _forceShow = self._displayNameAndHints(roleName)
+        taskName, _hidden, _forceShow = self._displayNameAndHints(taskName)
         task = ProgressItem(
             taskName,
             self.currentPlay.startTime if startTime is None else startTime,
@@ -682,12 +720,18 @@ class AnsibleProgressParser:
 
         if self.currentPlay is None:
             return
-        roleName, hidden = self._displayNameAndHidden(roleName)
+        roleName, hidden, forceShow = self._displayNameAndHints(roleName)
         if self.currentRole is not None and self.currentRole.name == roleName:
             self.currentRole.hidden = self.currentRole.hidden or hidden
+            self.currentRole.forceShow = self.currentRole.forceShow or forceShow
             return
         self._finalizeRole(now)
-        self.currentRole = ProgressItem(roleName, now, hidden=hidden)
+        self.currentRole = ProgressItem(
+            roleName,
+            now,
+            forceShow=forceShow,
+            hidden=hidden,
+        )
 
     def _startTask(
         self,
@@ -715,13 +759,21 @@ class AnsibleProgressParser:
         else:
             self._finalizeRole(now)
             taskName = taskHeader
-        taskName, hidden = self._displayNameAndHidden(taskName)
+        taskName, hidden, forceShow = self._displayNameAndHints(taskName)
         if self._reopenLastCompletedTask(taskName, taskStartTime):
             if self.currentTask is not None:
                 self.currentTask.hidden = self.currentTask.hidden or hidden
+                self.currentTask.forceShow = (
+                    self.currentTask.forceShow or forceShow
+                )
             self.idleStartTime = None
             return
-        self.currentTask = ProgressItem(taskName, taskStartTime, hidden=hidden)
+        self.currentTask = ProgressItem(
+            taskName,
+            taskStartTime,
+            forceShow=forceShow,
+            hidden=hidden,
+        )
         self.idleStartTime = None
 
     @staticmethod
@@ -766,7 +818,7 @@ class AnsibleProgressParser:
             return False
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
-            roleName, _hidden = self._displayNameAndHidden(roleName)
+            roleName, _hidden, _forceShow = self._displayNameAndHints(roleName)
             currentRoleName = (
                 self.currentRole.name if self.currentRole is not None else None
             )
@@ -788,7 +840,7 @@ class AnsibleProgressParser:
         taskName = taskHeader
         if " : " in taskHeader:
             roleName, taskName = taskHeader.split(" : ", 1)
-            roleName, _hidden = self._displayNameAndHidden(roleName)
+            roleName, _hidden, _forceShow = self._displayNameAndHints(roleName)
         normalizedTaskName = self._normalizeTaskHeader(taskName)
 
         if self._matchesCurrentTask(taskHeader):
@@ -815,13 +867,22 @@ class AnsibleProgressParser:
     def _normalizeTaskHeader(taskHeader: str) -> str:
         """Normalize task headers for alias matching."""
 
-        displayName, _hidden = AnsibleProgressParser._displayNameAndHidden(taskHeader)
+        displayName, _hidden, _forceShow = AnsibleProgressParser._displayNameAndHints(
+            taskHeader
+        )
         return " ".join(displayName.lower().split())
 
     @staticmethod
-    def _displayNameAndHidden(name: str) -> tuple[str, bool]:
-        """Return display name and whether it carries the AR hide hint."""
+    def _displayNameAndHints(name: str) -> tuple[str, bool, bool]:
+        """Return display name and AR display hints."""
 
         hidden = bool(AR_HIDE_HINT_PATTERN.search(name))
+        forceShow = bool(AR_SHOW_HINT_PATTERN.search(name))
+        if hidden and forceShow:
+            raise ValueError(
+                "Invalid AR display hints: cannot use @ar:show and @ar:hide "
+                f"together in {name!r}."
+            )
         displayName = AR_HIDE_HINT_PATTERN.sub(" ", name)
-        return " ".join(displayName.split()), hidden
+        displayName = AR_SHOW_HINT_PATTERN.sub(" ", displayName)
+        return " ".join(displayName.split()), hidden, forceShow

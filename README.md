@@ -85,5 +85,5 @@ See [Project Layout](docs/projectLayout.md) for supported layout options.
 - [Nested Playbooks](docs/nestedPlaybooks.md): nested directory behavior,
   `playbookPath`, and lookup plugin examples.
 - [TUI Usage](docs/tuiUsage.md): menu, launch, configure, run, and CLI usage.
-- [Display Wrappers](docs/displayWrappers.md): `@ar:hide`, `niceWait`,
-  `niceInput`, `niceDisplay`, and AR markup.
+- [Display Wrappers](docs/displayWrappers.md): `@ar:hide`, `@ar:show`,
+  `niceWait`, `niceInput`, `niceDisplay`, `niceFail`, and AR markup.
