@@ -42,6 +42,7 @@ class PlaybookMenuScreen(Container):
 
     BINDINGS = [
         ("c", "configure", "Configure"),
+        ("escape", "back_or_quit", "Back"),
     ]
 
     def __init__(
@@ -79,7 +80,7 @@ class PlaybookMenuScreen(Container):
             yield Static("📋 Available playbooks", id="playbook-title")
             yield DataTable(id="playbook-table")
             yield Static(
-                "↑/↓ move  Enter open/launch  c configure  q/Esc quit",
+                "↑/↓ move  Enter open/launch  c configure  Esc back  q quit",
                 id="playbook-help",
             )
 
@@ -160,6 +161,16 @@ class PlaybookMenuScreen(Container):
             self.notify("Configure flow is not wired.", title="Coming soon")
             return
         await self.onConfigure(selectedEntry)
+
+    def action_back_or_quit(self) -> None:
+        """Pop up one directory, or quit when already at the playbook root."""
+
+        root = self.playbookRoot.resolve()
+        current = self.currentDir.expanduser().resolve()
+        if current != root and root in current.parents:
+            self.openDirectory(current.parent)
+            return
+        self.app.exit()
 
     def openDirectory(self, directory: Path) -> None:
         """Open a playbook directory in the table.

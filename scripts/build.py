@@ -39,6 +39,17 @@
 
 from __future__ import annotations
 
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _lib.pythonSelect import (  # noqa: E402
+    MIN_PYTHON,
+    findSuitablePython,
+    pythonVersion,
+    reexecIfNeeded,
+)
+reexecIfNeeded(MIN_PYTHON)
+
 import argparse
 import importlib.util
 import logging
@@ -51,7 +62,6 @@ import threading
 import textwrap
 import time
 import unicodedata
-import venv
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -774,22 +784,51 @@ def hasToolRequirements(pythonBin: str, logger: logging.Logger) -> bool:
     return result.returncode == 0
 
 
-def createVenv(venvDir: Path, context: BuildContext) -> None:
-    """Create a virtual environment when it does not already exist.
+def createVenv(venvDir: Path, context: BuildContext, pythonBin: str) -> None:
+    """Create a virtual environment using the chosen Python interpreter.
+
+    Reuses an existing venv only when its interpreter is still usable and
+    meets MIN_PYTHON. Otherwise the stale venv is removed and rebuilt.
 
     Args:
         venvDir: Virtual environment directory.
         context: Build runtime context.
+        pythonBin: Python executable used to create the venv.
     """
 
     if venvDir.exists():
-        context.logger.info("<createVenv> existingVenv=[%s]", venvDir)
-        context.ui.substep(f"Using existing virtual environment: {venvDir}")
-        return
+        existingPython = getVenvPython(venvDir)
+        existingVersion = pythonVersion(str(existingPython), context.logger)
+        if existingVersion is not None and existingVersion >= MIN_PYTHON:
+            context.logger.info("<createVenv> existingVenv=[%s]", venvDir)
+            context.ui.substep(f"Using existing virtual environment: {venvDir}")
+            return
+        reason = (
+            "unusable" if existingVersion is None
+            else f"Python {existingVersion[0]}.{existingVersion[1]}"
+        )
+        context.logger.info(
+            "<createVenv> rebuildingStaleVenv=[%s] reason=[%s]", venvDir, reason,
+        )
+        context.ui.substep(
+            f"Removing stale virtual environment ({reason}): {venvDir}"
+        )
+        shutil.rmtree(venvDir)
 
-    context.logger.info("<createVenv> creatingVenv=[%s]", venvDir)
+    context.logger.info(
+        "<createVenv> creatingVenv=[%s] python=[%s]", venvDir, pythonBin,
+    )
     context.ui.substep(f"Creating virtual environment: {venvDir}")
-    venv.create(venvDir, with_pip=True)
+    result = runCommand(
+        [pythonBin, "-m", "venv", str(venvDir)],
+        context.logger,
+    )
+    if result.returncode != 0:
+        context.ui.failure(
+            f"venv creation failed (returnCode={result.returncode}). "
+            f"See log for more details."
+        )
+        raise SystemExit(result.returncode)
 
 
 def getVenvPython(venvDir: Path) -> Path:
@@ -846,14 +885,43 @@ def ensureBuildPython(context: BuildContext, args: argparse.Namespace) -> str:
 
     context.logger.debug("<ensureBuildPython> entry: python=[%s]", args.python)
     startStep(context, "🧰 Prepare build environment")
-    context.ui.substep(f"Checking Python: {args.python}")
-    if hasToolRequirements(args.python, context.logger):
-        context.logger.debug("<ensureBuildPython> exit: usingPython=[%s]", args.python)
+
+    pythonBin = args.python
+    pythonExplicitlySet = args.python != sys.executable
+    version = pythonVersion(pythonBin, context.logger)
+    if version is None or version < MIN_PYTHON:
+        if pythonExplicitlySet:
+            context.ui.failure(
+                f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required; "
+                f"--python points to "
+                f"{'unusable' if version is None else '.'.join(str(v) for v in version)} "
+                f"interpreter at {pythonBin}."
+            )
+            raise SystemExit(1)
+        if version is not None:
+            context.ui.substep(
+                f"Invoking Python is {version[0]}.{version[1]}; "
+                f"searching for {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+."
+            )
+        suitable = findSuitablePython(MIN_PYTHON, context.logger)
+        if suitable is None:
+            context.ui.failure(
+                f"No Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ interpreter found "
+                f"on PATH or standard locations. Install one (e.g. "
+                f"brew install python@3.14) and retry."
+            )
+            raise SystemExit(1)
+        context.ui.substep(f"Selected Python: {suitable}")
+        pythonBin = suitable
+
+    context.ui.substep(f"Checking Python: {pythonBin}")
+    if hasToolRequirements(pythonBin, context.logger):
+        context.logger.debug("<ensureBuildPython> exit: usingPython=[%s]", pythonBin)
         context.ui.substep("Selected Python already has test/build requirements.")
-        return args.python
+        return pythonBin
 
     venvDir = (context.projectRoot / args.venvDir).resolve()
-    createVenv(venvDir, context)
+    createVenv(venvDir, context, pythonBin)
     venvPython = getVenvPython(venvDir)
     context.ui.substep(f"Checking virtual environment Python: {venvPython}")
 

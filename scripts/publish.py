@@ -44,6 +44,12 @@
 
 from __future__ import annotations
 
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _lib.pythonSelect import MIN_PYTHON, reexecIfNeeded  # noqa: E402
+reexecIfNeeded(MIN_PYTHON)
+
 import argparse
 import re
 import shutil
