@@ -39,6 +39,14 @@ def buildParser() -> argparse.ArgumentParser:
         prog="ansibleRunner",
         description="Run project-local Ansible management workflows.",
     )
+    from ansibleRunner import __version__
+
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument(
         "--arPath",
         dest="arPath",

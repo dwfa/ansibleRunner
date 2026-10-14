@@ -95,6 +95,7 @@ class LaunchScreen(Container):
         """
 
         super().__init__(id="launch-menu")
+        self.defaults = defaults
         self.savedConfig = self._loadConfig(defaults, entry)
         self.config = config or self.savedConfig
         self.entry = entry
@@ -209,7 +210,10 @@ class LaunchScreen(Container):
         """Build launch title text.
 
         Returns:
-            Playbook name with optional node context.
+            Playbook name, suffixed with the configured ``-n`` host when
+            one is set. The pre-run screen does not predict the host that
+            an unset ``-n`` would resolve to; the Run screen fills that
+            in from live events.
         """
 
         titleParts = [self.entry.displayName]

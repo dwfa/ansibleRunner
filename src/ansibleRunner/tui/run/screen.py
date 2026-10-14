@@ -34,6 +34,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.selection import Selection
 from textual.widgets import Input, Static
 
@@ -41,6 +42,7 @@ from ansibleRunner.defaults import RuntimeDefaults
 from ansibleRunner.playbooks.models import PlaybookConfig, PlaybookEntry
 from ansibleRunner.playbooks.playbookConfig import buildRunnerArgv
 from ansibleRunner.tui.markup import renderArMarkup, stripArMarkup
+from ansibleRunner.tui.runLogs import hostFromEvent
 from ansibleRunner.progressParser import (
     ANSI_PATTERN,
     AnsibleProgressParser,
@@ -149,6 +151,7 @@ class RunScreen(Container):
         self.defaults = defaults
         self.entry = entry
         self.followProgress = True
+        self.observedHost: str | None = None
         self.onBack = onBack
         self.progressParser = AnsibleProgressParser(
             cast(OutputLevel, self.config.outputLevel)
@@ -455,13 +458,36 @@ class RunScreen(Container):
         """Build run title text.
 
         Returns:
-            Playbook name with optional node context.
+            Playbook name, suffixed with ``-n``'s host when set, else
+            with the first non-init-role host observed in this run's
+            event stream. Never falls back to prior runs.
         """
 
         titleParts = [self.entry.displayName]
-        if self.config.node:
-            titleParts.append(self.config.node)
+        host = self.config.node or self.observedHost
+        if host:
+            titleParts.append(host)
         return " ".join(titleParts)
+
+    def _observeHostFromEvent(self, eventRecord: dict[str, object]) -> None:
+        """Record the first non-init-role target host seen in this run.
+
+        Updates the title bar in place the first time a host is observed.
+        No-ops when ``-n`` is set (the explicit value already drives the
+        title) or when a host has already been recorded.
+        """
+
+        if self.config.node or self.observedHost is not None:
+            return
+        host = hostFromEvent(eventRecord)
+        if host is None:
+            return
+        self.observedHost = host
+        try:
+            titleWidget = self.query_one("#run-title", Static)
+        except NoMatches:
+            return
+        titleWidget.update(self._playbookNameText())
 
     def _processProgressLine(self, line: str) -> None:
         """Update parsed progress state from one output line.
@@ -596,6 +622,7 @@ class RunScreen(Container):
     def _processEventRecord(self, eventRecord: dict[str, object]) -> None:
         """Process one structured Ansible callback event."""
 
+        self._observeHostFromEvent(eventRecord)
         eventName = str(eventRecord.get("event") or "")
         now = monotonic()
         if eventName == "play_start":

@@ -16,6 +16,13 @@
 
 """Public API for ansibleRunner."""
 
+from importlib.metadata import PackageNotFoundError, version as _packageVersion
+
 from ansibleRunner.app import main
 
-__all__ = ["main"]
+try:
+    __version__ = _packageVersion("ansibleRunner")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
+__all__ = ["__version__", "main"]
